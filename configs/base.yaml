@@ -1,0 +1,77 @@
+# configs/base.yaml
+# Single source of truth for all experiment hyperparameters.
+# All scripts read from this file — never hardcode values elsewhere.
+
+# Reproducibility
+seed: 42
+
+# Models
+models:
+  deit_small:
+    timm_name: "deit_small_patch16_224"
+    hf_name: "facebook/deit-small-patch16-224"
+    num_classes: 1000
+    input_size: 224
+  deit_base:
+    timm_name: "deit_base_patch16_224"
+    hf_name: "facebook/deit-base-patch16-224"
+    num_classes: 1000
+    input_size: 224
+
+# Compression
+compression:
+  levels: ["fp32", "int8", "int4"]
+  int8:
+    backend: "bitsandbytes"
+    load_in_8bit: true
+  int4:
+    backend: "bitsandbytes"
+    load_in_4bit: true
+    bnb_4bit_quant_type: "nf4"
+    bnb_4bit_compute_dtype: "float16"
+
+# Dataset
+dataset:
+  name: "imagenet1k"
+  val_subset_size: 1000
+  train_subset_size: 5000
+  image_size: 224
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
+  # Update these paths for your environment:
+  # Colab:  /content/drive/MyDrive/research/data/imagenet
+  # Kaggle: /kaggle/input/imagenet-object-localization-challenge
+  val_dir: "data/imagenet/val"
+  train_dir: "data/imagenet/train"
+
+# Attack - FGSM
+attack:
+  name: "fgsm"
+  eps: 0.03137
+  targeted: false
+
+# Defense - Adversarial Training
+defense:
+  name: "adversarial_training"
+  epochs: 3
+  optimizer: "sgd"
+  lr: 0.01
+  momentum: 0.9
+  weight_decay: 0.0001
+  batch_size: 32
+  at_eps: 0.03137
+  save_every_epoch: true
+
+# Evaluation
+eval:
+  batch_size: 64
+  num_workers: 2
+  latency_warmup_runs: 10
+  latency_measure_runs: 100
+
+# Paths
+paths:
+  results_dir: "results"
+  figures_dir: "results/figures"
+  checkpoints_dir: "results/checkpoints"
+  drive_backup_dir: "/content/drive/MyDrive/research/results"
