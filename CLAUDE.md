@@ -13,6 +13,7 @@ at edge compression levels.
 
 ## Hardware & environment
 
+
 - **Platform:** Local machine, VS Code with Claude Code extension
 - **Python:** [FILL IN — check with `python --version`]
 - **Virtual env:** .venv — activate before every session

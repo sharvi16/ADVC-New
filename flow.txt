@@ -1,0 +1,8 @@
+attacks/fgsm.py              ← done
+utils/metrics.py             ← accuracy, ASR, robustness gap functions
+experiments/eval_clean.py    ← baseline clean accuracy with CSV saving
+experiments/eval_robust.py   ← FGSM eval across compression levels
+defenses/adversarial_training.py
+experiments/eval_efficiency.py
+notebooks/00_setup_check.ipynb
+notebooks/02_results_viz.ipynb

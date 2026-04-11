@@ -47,27 +47,27 @@ dataset:
 # Attack - FGSM
 attack:
   name: "fgsm"
-  eps: 0.03137
+  eps: 0.03137 #adds noise 
   targeted: false
 
 # Defense - Adversarial Training
 defense:
   name: "adversarial_training"
   epochs: 3
-  optimizer: "sgd"
+  optimizer: "sgd" 
   lr: 0.01
   momentum: 0.9
   weight_decay: 0.0001
-  batch_size: 32
-  at_eps: 0.03137
+  batch_size: 32 
+  at_eps: 0.03137 
   save_every_epoch: true
 
 # Evaluation
 eval:
   batch_size: 64
   num_workers: 2
-  latency_warmup_runs: 10
-  latency_measure_runs: 100
+  latency_warmup_runs: 10 
+  latency_measure_runs: 100 
 
 # Paths
 paths:
