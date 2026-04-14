@@ -45,10 +45,22 @@ dataset:
   train_dir: "data/imagenet/train"
 
 # Attack - FGSM
-attack:
+fgsm:
   name: "fgsm"
-  eps: 0.03137 #adds noise 
+  eps: 0.03137 #adds noise
   targeted: false
+
+# Attack - PGD
+pgd:
+  eps: 0.03137      # 8/255 — same as FGSM
+  alpha: 0.00784    # 2/255 — step size
+  steps: 10         # keep low for Colab speed
+
+# Attack - Adversarial Patch
+patch:
+  patch_size: 32    # 32x32 patch on 224x224 image (~2% of image area)
+  steps: 100        # patch needs more steps than PGD
+  lr: 0.05
 
 # Defense - Adversarial Training
 defense:
@@ -61,7 +73,6 @@ defense:
   batch_size: 32 
   at_eps: 0.03137 
   save_every_epoch: true
-
 # Evaluation
 eval:
   batch_size: 64

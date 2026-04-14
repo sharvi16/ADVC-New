@@ -1,17 +1,16 @@
 """
-attacks/fgsm.py
+attacks/pgd.py
 
-FGSM attack wrapper using torchattacks.
+PGD attack wrapper using torchattacks.
 All parameters come from configs/base.yaml — never hardcode values here.
 
 Usage:
-    from attacks.fgsm import load_config, build_attack
+    from attacks.pgd import load_config, build_attack
     cfg = load_config()
     attack = build_attack(model, config=cfg)
     adv_images = attack(images, labels)
 """
 
-import yaml
 import torch
 import torchattacks
 from models.loader import load_config  # noqa: F401 — re-exported for convenience
@@ -20,24 +19,29 @@ from models.loader import load_config  # noqa: F401 — re-exported for convenie
 def build_attack(
     model: torch.nn.Module,
     config: dict,
-) -> torchattacks.FGSM:
+) -> torchattacks.PGD:
     """
-    Build an FGSM attack bound to the given model.
+    Build a PGD attack bound to the given model.
 
     Args:
         model:  A torch.nn.Module in eval mode.
         config: Parsed base.yaml config dict.
 
     Returns:
-        attack: torchattacks.FGSM instance ready for inference.
+        attack: torchattacks.PGD instance ready for inference.
     """
-    eps = config["fgsm"]["eps"]
-    attack = torchattacks.FGSM(model, eps=eps)
+    pgd_cfg = config["pgd"]
+    attack = torchattacks.PGD(
+        model,
+        eps=pgd_cfg["eps"],
+        alpha=pgd_cfg["alpha"],
+        steps=pgd_cfg["steps"],
+    )
     return attack
 
 
 def run_attack(
-    attack: torchattacks.FGSM,
+    attack: torchattacks.PGD,
     images: torch.Tensor,
     labels: torch.Tensor,
 ) -> torch.Tensor:
@@ -45,7 +49,7 @@ def run_attack(
     Generate adversarial examples for a batch.
 
     Args:
-        attack: A configured torchattacks.FGSM instance.
+        attack: A configured torchattacks.PGD instance.
         images: Clean input batch, shape (N, 3, H, W), values in [0, 1].
         labels: Ground-truth class indices, shape (N,).
 
@@ -58,10 +62,12 @@ def run_attack(
 
 def print_attack_info(config: dict) -> None:
     """Print a quick summary of the configured attack."""
-    eps = config["fgsm"]["eps"]
-    print(f"[fgsm] Attack : FGSM")
-    print(f"       eps    : {eps:.5f}  ({round(eps * 255)}/255)")
-    print(f"       norm   : L-inf")
+    pgd_cfg = config["pgd"]
+    print(f"[pgd] Attack : PGD")
+    print(f"      eps    : {pgd_cfg['eps']:.5f}  ({round(pgd_cfg['eps'] * 255)}/255)")
+    print(f"      alpha  : {pgd_cfg['alpha']:.5f}  ({round(pgd_cfg['alpha'] * 255)}/255)")
+    print(f"      steps  : {pgd_cfg['steps']}")
+    print(f"      norm   : L-inf")
 
 
 # Sanity check — run directly to verify attack builds and runs
@@ -69,7 +75,7 @@ if __name__ == "__main__":
     from models.loader import load_model
 
     cfg = load_config()
-    print("=== Sanity check: FGSM on DeiT-S FP32 ===\n")
+    print("=== Sanity check: PGD on DeiT-S FP32 ===\n")
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = load_model("deit_small", "fp32", cfg, device=device)
@@ -83,7 +89,7 @@ if __name__ == "__main__":
 
     adv_images = run_attack(attack, dummy_images, dummy_labels)
 
-    print(f"\n[fgsm] Input  shape : {dummy_images.shape}")
-    print(f"[fgsm] Output shape : {adv_images.shape}")
-    print(f"[fgsm] Max perturbation: {(adv_images - dummy_images).abs().max():.5f}")
-    print(f"[fgsm] Expected max    : {cfg['fgsm']['eps']:.5f}")
+    print(f"\n[pgd] Input  shape : {dummy_images.shape}")
+    print(f"[pgd] Output shape : {adv_images.shape}")
+    print(f"[pgd] Max perturbation: {(adv_images - dummy_images).abs().max():.5f}")
+    print(f"[pgd] Expected max    : {cfg['pgd']['eps']:.5f}")
