@@ -1,0 +1,34 @@
+# requirements.txt
+# Install with: pip install -r requirements.txt
+#
+# Note: torch and torchvision are pre-installed in Colab.
+# If running locally, uncomment the torch lines and match your CUDA version.
+# See: https://pytorch.org/get-started/locally/
+
+# ── Core deep learning ────────────────────────────────────────────────────────
+# torch>=2.1.0               # pre-installed in Colab — uncomment for local
+# torchvision>=0.16.0        # pre-installed in Colab — uncomment for local
+
+# ── Model loading ─────────────────────────────────────────────────────────────
+timm>=0.9.0                  # DeiT-S / DeiT-B via timm.create_model
+transformers>=4.35.0         # HuggingFace AutoModelForImageClassification (int8/int4)
+accelerate>=0.24.0           # required by transformers device_map="auto"
+
+# ── Quantization ──────────────────────────────────────────────────────────────
+bitsandbytes>=0.41.0         # INT8 and NF4 (INT4) post-training quantization
+
+# ── Attacks ───────────────────────────────────────────────────────────────────
+torchattacks>=3.4.0          # FGSM and PGD wrappers
+
+# ── Data ──────────────────────────────────────────────────────────────────────
+datasets>=2.14.0             # HuggingFace datasets — used in setup_data_colab.py
+Pillow>=9.0.0                # image I/O in setup_data_colab.py
+
+# ── Config ────────────────────────────────────────────────────────────────────
+PyYAML>=6.0                  # load configs/base.yaml
+
+# ── Notebooks ─────────────────────────────────────────────────────────────────
+jupyter>=1.0.0
+ipykernel>=6.0.0
+matplotlib>=3.7.0            # results visualisation in notebooks
+pandas>=2.0.0                # table handling in notebooks
