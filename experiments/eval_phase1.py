@@ -83,8 +83,46 @@ class LogitsWrapper(nn.Module):
 
 # ── Data loading ──────────────────────────────────────────────────────────────
 
+# When using ImageNette (10-class subset) instead of full ImageNet-1k, the
+# ImageFolder class indices (0–9) don't match the pretrained model's output
+# indices.  This table remaps each synset to its correct ImageNet-1k position.
+_IMAGENETTE_TO_IMAGENET: dict[str, int] = {
+    "n01440764": 0,    # tench
+    "n02102040": 217,  # English springer
+    "n02979186": 482,  # cassette player
+    "n03000684": 491,  # chain saw
+    "n03028079": 497,  # church
+    "n03394916": 566,  # French horn
+    "n03417042": 569,  # garbage truck
+    "n03425413": 571,  # gas pump
+    "n03445777": 574,  # golf ball
+    "n03888257": 701,  # parachute
+}
+
+
+def _remap_subset_labels(dataset: ImageFolder) -> ImageFolder:
+    """Remap ImageFolder targets to ImageNet-1k indices for subset datasets.
+
+    No-op when the dataset already has 1000 classes (full ImageNet).
+    """
+    if len(dataset.classes) >= 1000:
+        return dataset
+    new_samples = []
+    for path, lbl in dataset.samples:
+        synset = dataset.classes[lbl]
+        new_lbl = _IMAGENETTE_TO_IMAGENET.get(synset, lbl)
+        new_samples.append((path, new_lbl))
+    dataset.samples = new_samples
+    dataset.targets = [lbl for _, lbl in new_samples]
+    return dataset
+
+
 def build_val_loader(cfg: dict, device: str) -> DataLoader:
-    """Build a deterministic 1000-image ImageNet validation subset loader.
+    """Build a deterministic subset loader for the validation set.
+
+    Works with both full ImageNet-1k and ImageNette (10-class subset).
+    Labels are remapped to ImageNet-1k indices automatically when a subset
+    is detected (< 1000 classes).
 
     The subset is drawn with seed=42 via randperm, matching the fixed split
     described in configs/base.yaml so results are reproducible across runs.
@@ -100,10 +138,12 @@ def build_val_loader(cfg: dict, device: str) -> DataLoader:
     ])
 
     full_dataset = ImageFolder(root=str(_ROOT / ds_cfg["val_dir"]), transform=transform)
+    full_dataset = _remap_subset_labels(full_dataset)
 
     rng = torch.Generator()
     rng.manual_seed(cfg["seed"])
-    indices = torch.randperm(len(full_dataset), generator=rng)[: ds_cfg["val_subset_size"]].tolist()
+    n = min(ds_cfg["val_subset_size"], len(full_dataset))
+    indices = torch.randperm(len(full_dataset), generator=rng)[:n].tolist()
     subset = Subset(full_dataset, indices)
 
     loader = DataLoader(
