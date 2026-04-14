@@ -87,22 +87,26 @@ def _load_int8(timm_name: str, config: dict, device: str) -> torch.nn.Module:
 
     if backend == "bitsandbytes":
         try:
-            from transformers import AutoModelForImageClassification
+            from transformers import AutoModelForImageClassification, BitsAndBytesConfig
             import bitsandbytes  # noqa: F401
 
             hf_name = _get_hf_name(timm_name, config)
 
+            # load_in_8bit as a direct kwarg was removed in newer transformers;
+            # it must be passed via BitsAndBytesConfig instead.
+            bnb_config = BitsAndBytesConfig(load_in_8bit=True)
+
             model = AutoModelForImageClassification.from_pretrained(
                 hf_name,
-                load_in_8bit=True,
+                quantization_config=bnb_config,
                 device_map="auto",
             )
             return model
 
-        except ImportError:
+        except (ImportError, Exception) as exc:
             print(
-                "[loader] bitsandbytes not available, "
-                "falling back to torch static quantization for INT8."
+                f"[loader] bitsandbytes INT8 failed ({exc}), "
+                "falling back to torch static quantization."
             )
             backend = "torch"
 
