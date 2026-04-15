@@ -17,7 +17,7 @@ from typing import Literal
 
 
 CompressionLevel = Literal["fp32", "int8", "int4"]
-ModelName = Literal["deit_small", "deit_base"]
+ModelName = Literal["deit_small"]
 
 
 def load_config(config_path: str = "configs/base.yaml") -> dict:
@@ -44,7 +44,7 @@ def load_model(
     Load a DeiT model at the specified compression level.
 
     Args:
-        model_name:  "deit_small" or "deit_base"
+        model_name:  "deit_small"
         compression: "fp32", "int8", or "int4"
         config:      Parsed base.yaml config dict
         device:      "cuda" or "cpu"

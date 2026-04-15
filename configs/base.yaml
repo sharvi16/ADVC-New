@@ -12,11 +12,6 @@ models:
     hf_name: "facebook/deit-small-patch16-224"
     num_classes: 1000
     input_size: 224
-  deit_base:
-    timm_name: "deit_base_patch16_224"
-    hf_name: "facebook/deit-base-patch16-224"
-    num_classes: 1000
-    input_size: 224
 
 # Compression
 compression:
@@ -33,8 +28,8 @@ compression:
 # Dataset
 dataset:
   name: "imagenet1k"
-  val_subset_size: 1000
-  train_subset_size: 5000
+  val_subset_size: 5000
+  train_subset_size: 10000
   image_size: 224
   mean: [0.485, 0.456, 0.406]
   std: [0.229, 0.224, 0.225]
@@ -54,25 +49,31 @@ fgsm:
 pgd:
   eps: 0.03137      # 8/255 — same as FGSM
   alpha: 0.00784    # 2/255 — step size
-  steps: 10         # keep low for Colab speed
+  steps: 20         # standard in robustness literature
 
 # Attack - Adversarial Patch
 patch:
   patch_size: 32    # 32x32 patch on 224x224 image (~2% of image area)
-  steps: 100        # patch needs more steps than PGD
+  steps: 150        # patch needs more steps than PGD
   lr: 0.05
 
-# Defense - Adversarial Training
+# Defense - Adversarial Training (AT)
 defense:
   name: "adversarial_training"
-  epochs: 3
-  optimizer: "sgd" 
+  epochs: 7
+  optimizer: "sgd"
   lr: 0.01
   momentum: 0.9
   weight_decay: 0.0001
-  batch_size: 32 
-  at_eps: 0.03137 
+  batch_size: 32
+  at_eps: 0.03137    # 8/255 — must match attack epsilon
   save_every_epoch: true
+
+# Defense - AT + Knowledge Distillation (AT+KD)
+at_kd:
+  temperature: 4.0   # softmax temperature for soft labels
+  alpha: 0.5         # weight for CE loss; (1-alpha) weights KL loss
+
 # Evaluation
 eval:
   batch_size: 64
@@ -84,5 +85,6 @@ eval:
 paths:
   results_dir: "results"
   figures_dir: "results/figures"
-  checkpoints_dir: "results/checkpoints"
-  drive_backup_dir: "/content/drive/MyDrive/research/results"
+  checkpoints_at_dir: "results/checkpoints/at"
+  checkpoints_atkd_dir: "results/checkpoints/atkd"
+  drive_backup_dir: "/content/drive/MyDrive/research"

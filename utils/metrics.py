@@ -90,16 +90,18 @@ def robustness_gap(
 # ---------------------------------------------------------------------------
 
 # Canonical column order for the results CSV.
+# Matches the schema defined in CLAUDE.md — do not reorder.
 _CSV_FIELDNAMES = [
     "timestamp",
     "model",
     "compression",
     "defense",
+    "attack",
     "clean_acc",
     "robust_acc",
     "asr",
     "robustness_gap",
-    "notes",
+    "phase",
 ]
 
 
@@ -108,26 +110,28 @@ def save_results_to_csv(
     model: str,
     compression: str,
     defense: str,
+    attack: str,
     clean_acc: float,
     robust_acc: float,
     asr: float,
     robustness_gap_val: float,
-    notes: str = "",
+    phase: int,
     filename: str = "results.csv",
 ) -> str:
     """Append a result row to results/<filename>, creating it with headers if needed.
 
     Args:
-        results_dir:      Path to the results directory (e.g. "results").
-        model:            Model identifier, e.g. "deit_small" or "deit_base".
-        compression:      Compression level, one of "fp32", "int8", "int4".
-        defense:          Defense applied, e.g. "none" or "adversarial_training".
-        clean_acc:        Clean accuracy in [0, 1].
-        robust_acc:       Robust accuracy in [0, 1].
-        asr:              Attack success rate in [0, 1].
+        results_dir:        Path to the results directory (e.g. "results").
+        model:              Model identifier, e.g. "deit_small".
+        compression:        Compression level, one of "fp32", "int8", "int4".
+        defense:            Defense applied, one of "none", "at", "at_kd".
+        attack:             Attack used, one of "fgsm", "pgd", "patch", "combined".
+        clean_acc:          Clean accuracy in [0, 1].
+        robust_acc:         Robust accuracy in [0, 1].
+        asr:                Attack success rate in [0, 1].
         robustness_gap_val: Robustness gap in [0, 1].
-        notes:            Optional free-text notes for the run.
-        filename:         CSV filename inside results_dir.
+        phase:              Experiment phase: 1, 2, or 3.
+        filename:           CSV filename inside results_dir.
 
     Returns:
         Absolute path to the CSV file.
@@ -141,11 +145,12 @@ def save_results_to_csv(
         "model": model,
         "compression": compression,
         "defense": defense,
+        "attack": attack,
         "clean_acc": round(clean_acc, 6),
         "robust_acc": round(robust_acc, 6),
         "asr": round(asr, 6),
         "robustness_gap": round(robustness_gap_val, 6),
-        "notes": notes,
+        "phase": phase,
     }
 
     with open(csv_path, "a", newline="") as f:
