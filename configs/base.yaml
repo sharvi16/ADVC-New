@@ -61,16 +61,16 @@ patch:
 defense:
   name: "adversarial_training"
   epochs: 7
-  optimizer: "sgd"
+  optimizer: "adamw"
   # Per-compression learning rates.
-  # FP32 can tolerate a higher LR; INT8/INT4 weights are quantised and
-  # over-large updates destroy the quantisation grid, collapsing clean acc.
+  # AdamW + layer-freezing requires much lower LRs than SGD full fine-tune.
+  # INT8/INT4 quantised weights are especially fragile — keep LR tiny.
   lr:
-    fp32: 0.0001
-    int8: 0.00005
-    int4: 0.00001
-  momentum: 0.9
-  weight_decay: 0.0001
+    fp32: 0.00001
+    int8: 0.000005
+    int4: 0.000001
+  weight_decay: 0.01
+  warmup_epochs: 1   # epoch 1 runs at lr/10; full lr from epoch 2 onward
   batch_size: 32
   at_eps: 0.03137    # 8/255 — must match attack epsilon
   save_every_epoch: true

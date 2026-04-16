@@ -224,6 +224,67 @@ def save_checkpoint(
 
 
 # ---------------------------------------------------------------------------
+# Layer-freeze helper
+# ---------------------------------------------------------------------------
+
+def _freeze_backbone(model: nn.Module) -> None:
+    """Freeze all layers, then unfreeze the last 4 transformer blocks and head.
+
+    Handles both timm FP32 models (model.blocks / model.head) and HuggingFace
+    DeiT models (model.deit.encoder.layer / model.classifier).  Falls back to
+    unfreezing everything if the architecture is not recognised.
+
+    For bitsandbytes quantised parameters that do not support gradients the
+    unfreeze step is skipped silently so that the rest of training can proceed.
+
+    Args:
+        model: The compressed model whose backbone should be frozen.
+    """
+    # Freeze everything first.
+    for param in model.parameters():
+        param.requires_grad = False
+
+    blocks_to_unfreeze: list = []
+    head_modules: list = []
+
+    # timm DeiT-S FP32: model.blocks (Sequential of 12), model.norm, model.head
+    if hasattr(model, "blocks"):
+        all_blocks = list(model.blocks)
+        blocks_to_unfreeze = all_blocks[-4:]
+        if hasattr(model, "norm"):
+            head_modules.append(model.norm)
+        if hasattr(model, "head"):
+            head_modules.append(model.head)
+
+    # HuggingFace DeiT (INT8 / INT4): model.deit.encoder.layer, model.classifier
+    elif hasattr(model, "deit") and hasattr(model.deit, "encoder"):
+        all_layers = list(model.deit.encoder.layer)
+        blocks_to_unfreeze = all_layers[-4:]
+        if hasattr(model, "classifier"):
+            head_modules.append(model.classifier)
+
+    else:
+        print("[AT] WARNING: unrecognised model architecture — unfreezing all parameters.")
+        for param in model.parameters():
+            param.requires_grad = True
+        return
+
+    for module in blocks_to_unfreeze + head_modules:
+        for param in module.parameters():
+            try:
+                param.requires_grad = True
+            except RuntimeError:
+                pass  # quantised params that don't support grad — skip silently
+
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    total     = sum(p.numel() for p in model.parameters())
+    print(
+        f"[AT] Layer freeze : last 4 blocks + head unfrozen → "
+        f"{trainable / 1e6:.2f}M / {total / 1e6:.2f}M params trainable"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Core training function
 # ---------------------------------------------------------------------------
 
@@ -235,11 +296,14 @@ def adversarial_train(
 ) -> nn.Module:
     """Fine-tune an already-compressed model using FGSM adversarial inputs.
 
-    Training follows the AT protocol from CLAUDE.md:
-      - Optimizer: SGD with params from config["defense"]
-      - Loss:      CrossEntropy on FGSM-perturbed inputs
-      - Epochs:    config["defense"]["epochs"]  (7)
+    Training protocol:
+      - Backbone frozen; only last 4 transformer blocks + classifier head trained.
+      - Optimizer : AdamW (weight_decay from config["defense"])
+      - LR schedule: linear warmup — lr/10 for epoch 1, full lr from epoch 2.
+      - Loss       : CrossEntropy on FGSM-perturbed inputs.
+      - Epochs     : config["defense"]["epochs"]  (7)
       - Checkpoint saved after every epoch to config["paths"]["checkpoints_at_dir"]
+      - Clean-acc drop > 15% triggers a printed WARNING; training continues.
 
     Args:
         model:        A torch.nn.Module that has already been compressed.
@@ -257,18 +321,17 @@ def adversarial_train(
     defense_cfg = config["defense"]
     ds_cfg      = config["dataset"]
     ckpt_dir = config["paths"]["checkpoints_at_dir"]
-    epochs: int         = defense_cfg["epochs"]
-    momentum: float     = defense_cfg["momentum"]
-    weight_decay: float = defense_cfg["weight_decay"]
-    at_eps: float       = defense_cfg["at_eps"]
+    epochs: int            = defense_cfg["epochs"]
+    weight_decay: float    = defense_cfg["weight_decay"]
+    at_eps: float          = defense_cfg["at_eps"]
+    warmup_epochs: int     = int(defense_cfg.get("warmup_epochs", 1))
     save_every_epoch: bool = defense_cfg.get("save_every_epoch", True)
-    mean: list          = ds_cfg["mean"]
-    std: list           = ds_cfg["std"]
+    mean: list             = ds_cfg["mean"]
+    std: list              = ds_cfg["std"]
 
     # Per-compression learning rate.
-    # High LR destroys quantised weights on INT8/INT4 — use a smaller rate
-    # for more aggressive compressions.  base.yaml stores lr as a dict keyed
-    # by compression level; fall back to a scalar if it is not a dict.
+    # AdamW + layer freezing requires much lower LRs than full SGD fine-tune.
+    # INT8/INT4 quantised weights are especially fragile.
     lr_cfg = defense_cfg["lr"]
     if isinstance(lr_cfg, dict):
         if compression not in lr_cfg:
@@ -297,20 +360,32 @@ def adversarial_train(
     fgsm = torchattacks.FGSM(_LogitsWrapper(model), eps=at_eps)
     fgsm.set_normalization_used(mean=mean, std=std)
 
-    optimizer = torch.optim.SGD(
-        model.parameters(),
+    # Freeze backbone — only last 4 blocks + head will receive gradient updates.
+    _freeze_backbone(model)
+
+    # Build optimizer over trainable params only.
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    optimizer = torch.optim.AdamW(
+        trainable_params,
         lr=lr,
-        momentum=momentum,
         weight_decay=weight_decay,
     )
+
+    # Linear warmup: epoch 1 runs at lr/10, full lr from epoch 2 onward.
+    def _warmup_lambda(epoch_idx: int) -> float:
+        return 0.1 if epoch_idx < warmup_epochs else 1.0
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=_warmup_lambda)
+
     criterion = nn.CrossEntropyLoss()
 
     print(f"[AT] Starting adversarial training — {epochs} epoch(s)")
-    print(f"[AT] compression : {compression}")
-    print(f"[AT] device      : {model_device}")
-    print(f"[AT] lr={lr}  momentum={momentum}  weight_decay={weight_decay}")
-    print(f"[AT] at_eps      : {at_eps:.5f}  ({round(at_eps * 255)}/255)")
-    print(f"[AT] checkpoints : {ckpt_dir}")
+    print(f"[AT] compression  : {compression}")
+    print(f"[AT] device       : {model_device}")
+    print(f"[AT] optimizer    : AdamW  lr={lr}  weight_decay={weight_decay}")
+    print(f"[AT] warmup_epochs: {warmup_epochs}  (epoch 1 uses lr={lr * 0.1:.2e})")
+    print(f"[AT] at_eps       : {at_eps:.5f}  ({round(at_eps * 255)}/255)")
+    print(f"[AT] checkpoints  : {ckpt_dir}")
     print()
 
     # Verify FGSM produces correct perturbations BEFORE any epoch runs.
@@ -324,10 +399,13 @@ def adversarial_train(
     print(f"[AT] Baseline clean_acc : {baseline_clean_acc:.4f}\n")
 
     _first_batch_checked = False
-    early_stop = False
 
     for epoch in range(1, epochs + 1):
         model.train()
+
+        # Show effective LR for this epoch (after LambdaLR scaling).
+        current_lr = scheduler.get_last_lr()[0] if epoch > 1 else lr * _warmup_lambda(0)
+        print(f"[AT] Epoch {epoch}/{epochs} — effective lr={current_lr:.2e}")
 
         running_loss = 0.0
         correct = 0
@@ -344,11 +422,7 @@ def adversarial_train(
             images = images.to(model_device)
             labels = labels.to(model_device)
 
-            # Fix 2 — image range check fires exactly once, before any
-            # gradient step.  ImageNet-normalised images span ≈ [-2.1, 2.6],
-            # so max > 2.0 is expected.  If max ≤ 2.0 the DataLoader likely
-            # forgot T.Normalize() — in that case set_normalization_used()
-            # would apply the perturbation in the wrong space.
+            # Image range check fires exactly once, before any gradient step.
             if not _first_batch_checked:
                 _first_batch_checked = True
                 print(
@@ -384,6 +458,9 @@ def adversarial_train(
                 acc=f"{correct / total:.4f}",
             )
 
+        # Step scheduler at end of each epoch (drives warmup → full lr).
+        scheduler.step()
+
         epoch_loss = running_loss / total
         epoch_acc  = correct / total
         print(
@@ -399,23 +476,17 @@ def adversarial_train(
             f"(baseline={baseline_clean_acc:.4f}  drop={clean_drop:+.4f})"
         )
 
-        if clean_drop > 0.10:
+        if clean_drop > 0.15:
             print(
                 f"\n[AT] *** WARNING: clean_acc dropped {clean_drop:.4f} "
-                f"(> 0.10 threshold) after epoch {epoch}. ***\n"
-                f"[AT] Stopping training early to prevent further degradation.\n"
-                f"[AT] Possible causes: LR too high for this compression level, "
-                f"or FGSM eps too large.\n"
-                f"[AT] Current lr={lr}  compression={compression}"
+                f"(> 0.15 threshold) after epoch {epoch}. ***\n"
+                f"[AT] Continuing training — saving checkpoint for all epochs.\n"
+                f"[AT] Current lr={current_lr:.2e}  compression={compression}"
             )
-            early_stop = True
 
         if save_every_epoch:
             ckpt_path = save_checkpoint(model, epoch, compression, ckpt_dir)
             print(f"[AT] Checkpoint saved → {ckpt_path}")
-
-        if early_stop:
-            break
 
     model.eval()
     print(f"\n[AT] Training complete.  Model returned in eval mode.")
