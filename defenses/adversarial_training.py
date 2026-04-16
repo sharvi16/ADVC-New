@@ -62,6 +62,83 @@ def _set_seeds(seed: int) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Perturbation sanity check
+# ---------------------------------------------------------------------------
+
+def _check_fgsm_perturbation(
+    fgsm: torchattacks.FGSM,
+    train_loader: torch.utils.data.DataLoader,
+    at_eps: float,
+    model_device: str,
+    mean: list,
+    std: list,
+) -> None:
+    """Assert that the FGSM L-inf perturbation in pixel space is within 10% of at_eps.
+
+    Grabs one batch from train_loader, generates adversarial examples, then
+    un-normalises both clean and adversarial images to [0, 1] pixel space.
+    Asserts that the L-inf of (adv − clean) lies in [at_eps * 0.9, at_eps * 1.1].
+
+    This check fires before any training epoch.  If it fails a ValueError is
+    raised immediately so no compute is wasted on a misconfigured run.
+
+    Args:
+        fgsm:         torchattacks.FGSM instance with set_normalization_used
+                      already called.
+        train_loader: DataLoader yielding ImageNet-normalised (mean/std) images.
+        at_eps:       Configured epsilon (defense.at_eps from base.yaml).
+        model_device: Device string for moving tensors to match the model.
+        mean:         ImageNet normalisation mean — 3-element list.
+        std:          ImageNet normalisation std  — 3-element list.
+
+    Raises:
+        ValueError: If the measured L-inf is outside at_eps ± 10%.
+    """
+    print("[AT] Running FGSM perturbation sanity check …")
+
+    images, labels = next(iter(train_loader))
+    images = images.to(model_device)
+    labels = labels.to(model_device)
+
+    # Generate adversarial examples (torchattacks handles grad internally).
+    adv_images = fgsm(images, labels)
+
+    # Un-normalise to [0, 1] pixel space for measurement.
+    # In normalised space the perturbation is scaled by 1/std per channel, so
+    # the L-inf of (adv_norm − clean_norm) is NOT eps.  Measuring in pixel
+    # space gives the true L-inf that must equal eps.
+    mean_t = torch.tensor(mean, dtype=images.dtype, device=model_device).view(1, 3, 1, 1)
+    std_t  = torch.tensor(std,  dtype=images.dtype, device=model_device).view(1, 3, 1, 1)
+    images_px = (images     * std_t + mean_t).clamp(0.0, 1.0)
+    adv_px    = (adv_images * std_t + mean_t).clamp(0.0, 1.0)
+
+    linf = (adv_px - images_px).abs().max().item()
+
+    lo = at_eps * 0.9
+    hi = at_eps * 1.1
+    print(
+        f"[AT] Perturbation L-inf (pixel space) : {linf:.5f}  "
+        f"(expected {at_eps:.5f} ± 10%  →  [{lo:.5f}, {hi:.5f}])"
+    )
+
+    if not (lo <= linf <= hi):
+        raise ValueError(
+            f"FGSM perturbation sanity check FAILED — training aborted.\n"
+            f"  Measured L-inf (pixel space) : {linf:.5f}\n"
+            f"  Expected range               : [{lo:.5f}, {hi:.5f}]\n"
+            f"  Configured at_eps            : {at_eps:.5f}  "
+            f"({round(at_eps * 255)}/255)\n"
+            "  Likely cause: set_normalization_used() was not called on the\n"
+            "  FGSM attack, so perturbations were applied in normalised space\n"
+            "  (~[-2.1, 2.6]) instead of pixel space ([0, 1]).  Ensure\n"
+            "  fgsm.set_normalization_used(mean, std) is called after building\n"
+            "  the attack."
+        )
+
+    print("[AT] Perturbation sanity check PASSED.\n")
+
+
+# ---------------------------------------------------------------------------
 # Checkpoint helpers
 # ---------------------------------------------------------------------------
 
@@ -138,22 +215,32 @@ def adversarial_train(
     _set_seeds(config["seed"])
 
     defense_cfg = config["defense"]
+    ds_cfg      = config["dataset"]
     ckpt_dir = config["paths"]["checkpoints_at_dir"]
-    epochs: int = defense_cfg["epochs"]
-    lr: float = defense_cfg["lr"]
-    momentum: float = defense_cfg["momentum"]
+    epochs: int       = defense_cfg["epochs"]
+    lr: float         = defense_cfg["lr"]
+    momentum: float   = defense_cfg["momentum"]
     weight_decay: float = defense_cfg["weight_decay"]
-    at_eps: float = defense_cfg["at_eps"]
+    at_eps: float     = defense_cfg["at_eps"]
     save_every_epoch: bool = defense_cfg.get("save_every_epoch", True)
+    mean: list        = ds_cfg["mean"]
+    std: list         = ds_cfg["std"]
 
     # Infer device from the first model parameter.
     model_device = next(model.parameters()).device
 
-    # Build FGSM attack bound to this model.  The model is temporarily put into
-    # train mode below; torchattacks will call model(x) to get gradients.
+    # Build FGSM attack bound to this model.
+    # set_normalization_used() is mandatory: training images are
+    # ImageNet-normalised (range ≈ [-2.1, 2.6]).  Without it torchattacks
+    # clamps normalised values to [0, 1], producing effective perturbations
+    # of ~2.1 in pixel space instead of the intended 8/255 ≈ 0.031.
+    # With it, torchattacks un-normalises internally, applies eps in [0,1]
+    # pixel space, then re-normalises before returning.
+    #
     # Use _LogitsWrapper so INT8/INT4 HuggingFace models (which return a
     # dataclass) expose a plain tensor interface to torchattacks.
     fgsm = torchattacks.FGSM(_LogitsWrapper(model), eps=at_eps)
+    fgsm.set_normalization_used(mean=mean, std=std)
 
     optimizer = torch.optim.SGD(
         model.parameters(),
@@ -170,6 +257,10 @@ def adversarial_train(
     print(f"[AT] at_eps      : {at_eps:.5f}  ({round(at_eps * 255)}/255)")
     print(f"[AT] checkpoints : {ckpt_dir}")
     print()
+
+    # Verify FGSM produces correct perturbations BEFORE any epoch runs.
+    # Raises ValueError immediately if L-inf is outside at_eps ± 10%.
+    _check_fgsm_perturbation(fgsm, train_loader, at_eps, model_device, mean, std)
 
     for epoch in range(1, epochs + 1):
         model.train()
