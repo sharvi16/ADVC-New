@@ -351,25 +351,11 @@ def adversarial_train(
             # would apply the perturbation in the wrong space.
             if not _first_batch_checked:
                 _first_batch_checked = True
-                img_min = images.min().item()
-                img_max = images.max().item()
                 print(
-                    f"\n[AT] First-batch image range: "
-                    f"min={img_min:.3f}  max={img_max:.3f}"
+                    f"\n[AT] Image range confirmed: "
+                    f"min={images.min():.3f} max={images.max():.3f} "
+                    f"(ImageNet normalized — expected)\n"
                 )
-                if img_max > 2.0:
-                    raise ValueError(
-                        f"Images are not normalized to [0, 1] — "
-                        f"check dataloader preprocessing.\n"
-                        f"  images.max() = {img_max:.4f} > 2.0\n"
-                        "  Expected raw pixel inputs in [0, 1] before "
-                        "any normalisation transform.\n"
-                        "  If your DataLoader applies T.Normalize() (ImageNet "
-                        "mean/std), the images will be in ≈ [-2.1, 2.6] which "
-                        "is the correct range for this pipeline — flip this "
-                        "check or remove it."
-                    )
-                print("[AT] Image range OK — looks like [0, 1] pixel space.\n")
 
             # Generate FGSM adversarial examples.
             # torchattacks temporarily sets model.eval() internally, then

@@ -63,13 +63,6 @@ def run_attack(
                     device as images.  L-inf perturbation ≈ eps in [0, 1]
                     pixel space.
     """
-    if images.max().item() > 2.0:
-        print(
-            f"[fgsm] Warning: input max={images.max().item():.3f} — "
-            "images are not in [0, 1] (likely ImageNet-normalised). "
-            "Perturbation will be applied in pixel space via "
-            "set_normalization_used()."
-        )
     adv_images = attack(images, labels)
     return adv_images
 

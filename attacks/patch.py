@@ -84,14 +84,7 @@ class PatchAttack:
         mean_t = torch.tensor(self.mean, dtype=images.dtype, device=device).view(1, C, 1, 1)
         std_t  = torch.tensor(self.std,  dtype=images.dtype, device=device).view(1, C, 1, 1)
 
-        # Warn and un-normalise to [0, 1] for patch optimisation
-        if images.max().item() > 2.0:
-            print(
-                f"[patch] Warning: input max={images.max().item():.3f} — "
-                "images are not in [0, 1] (likely ImageNet-normalised). "
-                "Un-normalising before patch optimisation."
-            )
-
+        # Un-normalise to [0, 1] for patch compositing
         images_unnorm = images * std_t + mean_t
         images_unnorm = images_unnorm.clamp(0.0, 1.0)
         assert images_unnorm.max().item() <= 1.0 + 1e-3, (
