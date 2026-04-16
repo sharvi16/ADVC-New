@@ -31,6 +31,23 @@ import torchattacks
 from models.loader import load_config  # noqa: F401 — re-exported for convenience
 
 
+class _LogitsWrapper(nn.Module):
+    """Unwrap HuggingFace ImageClassifierOutput to a plain (N, C) tensor.
+
+    torchattacks expects model(x) to return a plain tensor.  INT8/INT4 models
+    loaded via HuggingFace return a dataclass with a .logits attribute.  This
+    thin wrapper makes both cases identical so FGSM can compute gradients.
+    """
+
+    def __init__(self, model: nn.Module) -> None:
+        super().__init__()
+        self.model = model
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        out = self.model(x)
+        return out.logits if hasattr(out, "logits") else out
+
+
 # ---------------------------------------------------------------------------
 # Seed helpers
 # ---------------------------------------------------------------------------
@@ -117,7 +134,9 @@ def adversarial_train(
 
     # Build FGSM attack bound to this model.  The model is temporarily put into
     # train mode below; torchattacks will call model(x) to get gradients.
-    fgsm = torchattacks.FGSM(model, eps=at_eps)
+    # Use _LogitsWrapper so INT8/INT4 HuggingFace models (which return a
+    # dataclass) expose a plain tensor interface to torchattacks.
+    fgsm = torchattacks.FGSM(_LogitsWrapper(model), eps=at_eps)
 
     optimizer = torch.optim.SGD(
         model.parameters(),
