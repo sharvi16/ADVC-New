@@ -47,17 +47,11 @@ Measure and save results
 
 ### Why these two defenses and not others
 
-- **Input preprocessing and randomized smoothing** — operate on the image before
-  it touches the model. Compression-agnostic. Do not answer the research question.
-  Excluded.
 - **AT** — directly retrains compressed weights. The interaction with quantization
   precision is real and measurable. Included.
 - **AT+KD** — adds a FP32 teacher to guide compressed student recovery. Teacher
   soft labels provide richer supervision signal than hard labels alone, potentially
   recovering vision representations that PTQ destroyed. Included.
-- **Quantization-Aware Adversarial Training (QA-AT)** — excluded due to
-  bitsandbytes vs PyTorch QAT backend incompatibility and implementation complexity.
-  Revisit after all phases are complete if budget allows.
 
 ---
 
@@ -88,7 +82,7 @@ from google.colab import drive
 drive.mount('/content/drive')
 
 # Cell 4 — pull latest code
-!git clone https://github.com/YOUR_USERNAME/ADVC.git
+!git clone https://github.com/Jmanav/ADVC.git
 %cd ADVC
 
 # Cell 5 — restore any previous results from Drive
