@@ -313,6 +313,51 @@ def print_summary(results_path: str, model_name: str) -> None:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+def load_at_checkpoint(
+    model: nn.Module,
+    compression: str,
+    cfg: dict,
+) -> nn.Module:
+    """Load the final AT checkpoint into an already-loaded compressed model.
+
+    The checkpoint is expected at:
+        {checkpoints_at_dir}/at_{compression}_epoch{epochs:02d}.pt
+
+    This is the file written by defenses/adversarial_training.py after the
+    last training epoch.  The model must already be loaded at the correct
+    compression level before calling this function.
+
+    Args:
+        model:       Already-loaded (and compressed) nn.Module.
+        compression: Compression level string — "fp32", "int8", or "int4".
+        cfg:         Parsed base.yaml config dict.
+
+    Returns:
+        model: Same nn.Module with AT weights loaded, in eval mode.
+
+    Raises:
+        FileNotFoundError: If the checkpoint file does not exist.
+    """
+    ckpt_dir = cfg["paths"]["checkpoints_at_dir"]
+    epochs: int = cfg["defense"]["epochs"]
+    filename = f"at_{compression}_epoch{epochs:02d}.pt"
+    ckpt_path = _ROOT / ckpt_dir / filename
+
+    if not ckpt_path.is_file():
+        raise FileNotFoundError(
+            f"Checkpoint not found: {ckpt_path}\n"
+            f"Run without --skip-training first to generate it, "
+            f"or check that the file was copied from Drive."
+        )
+
+    print(f"[phase2-AT] {compression:<6}: loading checkpoint from {ckpt_path} …")
+    state_dict = torch.load(str(ckpt_path), map_location="cpu")
+    model.load_state_dict(state_dict)
+    model.eval()
+    print(f"[phase2-AT] {compression:<6}: checkpoint loaded.")
+    return model
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Phase 2a — AT defense sweep: compression × attack."
@@ -323,19 +368,30 @@ def main() -> None:
         choices=["deit_small"],
         help="Model to evaluate (default: deit_small)",
     )
+    parser.add_argument(
+        "--skip-training",
+        action="store_true",
+        help=(
+            "Skip AT fine-tuning and load the saved final-epoch checkpoint "
+            "from results/checkpoints/at/ instead.  Useful when AT has already "
+            "run and you only want to re-evaluate the defended model."
+        ),
+    )
     args = parser.parse_args()
     model_name: str = args.model
+    skip_training: bool = args.skip_training
 
     cfg = load_config(str(_ROOT / "configs/base.yaml"))
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    print(f"[phase2-AT] device      : {device}")
-    print(f"[phase2-AT] model       : {model_name}")
-    print(f"[phase2-AT] results     : {RESULTS_FILE}")
+    print(f"[phase2-AT] device        : {device}")
+    print(f"[phase2-AT] model         : {model_name}")
+    print(f"[phase2-AT] results       : {RESULTS_FILE}")
+    print(f"[phase2-AT] skip-training : {skip_training}")
     print()
 
     val_loader = build_val_loader(cfg, device)
-    train_loader = build_train_loader(cfg, device)
+    train_loader = build_train_loader(cfg, device) if not skip_training else None
     completed = load_completed_runs(RESULTS_FILE)
 
     if completed:
@@ -367,23 +423,37 @@ def main() -> None:
             print(f"[phase2-AT] {compression:<6}: load failed — {exc}")
             continue
 
-        # ── Apply AT defense ──────────────────────────────────────────────────
-        print(f"[phase2-AT] {compression:<6}: applying AT …")
-        try:
-            raw_model = adversarial_train(
-                raw_model, train_loader, cfg, compression=compression
-            )
-        except Exception as exc:
-            print(f"[phase2-AT] {compression:<6}: AT failed — {exc}")
-            del raw_model
-            if device == "cuda":
-                torch.cuda.empty_cache()
-            continue
+        # ── Apply AT defense (or load saved checkpoint) ───────────────────────
+        if skip_training:
+            print(f"[phase2-AT] {compression:<6}: --skip-training set, loading checkpoint …")
+            try:
+                raw_model = load_at_checkpoint(raw_model, compression, cfg)
+            except Exception as exc:
+                print(f"[phase2-AT] {compression:<6}: checkpoint load failed — {exc}")
+                del raw_model
+                if device == "cuda":
+                    torch.cuda.empty_cache()
+                continue
+        else:
+            print(f"[phase2-AT] {compression:<6}: applying AT …")
+            try:
+                raw_model = adversarial_train(
+                    raw_model, train_loader, cfg, compression=compression
+                )
+            except Exception as exc:
+                print(f"[phase2-AT] {compression:<6}: AT failed — {exc}")
+                del raw_model
+                if device == "cuda":
+                    torch.cuda.empty_cache()
+                continue
 
+        # Both clean_acc and robust_acc are measured here — after AT (or after
+        # loading the AT checkpoint) — on the same model in eval() mode.
         model = LogitsWrapper(raw_model)
         model.eval()
         model_device = infer_model_device(raw_model)
-        print(f"[phase2-AT] {compression:<6}: model on {model_device} (post-AT)")
+        mode_label = "checkpoint" if skip_training else "post-AT"
+        print(f"[phase2-AT] {compression:<6}: model on {model_device} ({mode_label})")
 
         # ── Clean accuracy (computed once, reused for all attacks) ────────────
         print(f"[phase2-AT] {compression:<6}: evaluating clean accuracy …")
