@@ -62,7 +62,13 @@ defense:
   name: "adversarial_training"
   epochs: 7
   optimizer: "sgd"
-  lr: 0.01
+  # Per-compression learning rates.
+  # FP32 can tolerate a higher LR; INT8/INT4 weights are quantised and
+  # over-large updates destroy the quantisation grid, collapsing clean acc.
+  lr:
+    fp32: 0.0001
+    int8: 0.00005
+    int4: 0.00001
   momentum: 0.9
   weight_decay: 0.0001
   batch_size: 32

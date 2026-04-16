@@ -139,6 +139,46 @@ def _check_fgsm_perturbation(
 
 
 # ---------------------------------------------------------------------------
+# Clean accuracy helper
+# ---------------------------------------------------------------------------
+
+def _measure_clean_acc(
+    model: nn.Module,
+    loader: torch.utils.data.DataLoader,
+    device: str,
+) -> float:
+    """Measure clean accuracy on the given loader.
+
+    Switches model to eval mode for measurement, then restores to train mode.
+
+    Args:
+        model:  The model to evaluate.
+        loader: DataLoader yielding (images, labels) batches.
+        device: Device string to move tensors to.
+
+    Returns:
+        Accuracy in [0, 1].
+    """
+    was_training = model.training
+    model.eval()
+    correct = 0
+    total = 0
+    with torch.no_grad():
+        for images, labels in loader:
+            images = images.to(device)
+            labels = labels.to(device)
+            logits = model(images)
+            if hasattr(logits, "logits"):
+                logits = logits.logits
+            preds = logits.argmax(dim=1)
+            correct += (preds == labels).sum().item()
+            total += labels.size(0)
+    if was_training:
+        model.train()
+    return correct / total if total > 0 else 0.0
+
+
+# ---------------------------------------------------------------------------
 # Checkpoint helpers
 # ---------------------------------------------------------------------------
 
@@ -217,14 +257,29 @@ def adversarial_train(
     defense_cfg = config["defense"]
     ds_cfg      = config["dataset"]
     ckpt_dir = config["paths"]["checkpoints_at_dir"]
-    epochs: int       = defense_cfg["epochs"]
-    lr: float         = defense_cfg["lr"]
-    momentum: float   = defense_cfg["momentum"]
+    epochs: int         = defense_cfg["epochs"]
+    momentum: float     = defense_cfg["momentum"]
     weight_decay: float = defense_cfg["weight_decay"]
-    at_eps: float     = defense_cfg["at_eps"]
+    at_eps: float       = defense_cfg["at_eps"]
     save_every_epoch: bool = defense_cfg.get("save_every_epoch", True)
-    mean: list        = ds_cfg["mean"]
-    std: list         = ds_cfg["std"]
+    mean: list          = ds_cfg["mean"]
+    std: list           = ds_cfg["std"]
+
+    # Per-compression learning rate.
+    # High LR destroys quantised weights on INT8/INT4 — use a smaller rate
+    # for more aggressive compressions.  base.yaml stores lr as a dict keyed
+    # by compression level; fall back to a scalar if it is not a dict.
+    lr_cfg = defense_cfg["lr"]
+    if isinstance(lr_cfg, dict):
+        if compression not in lr_cfg:
+            raise KeyError(
+                f"[AT] No LR configured for compression='{compression}'.  "
+                f"Add a '{compression}' key under defense.lr in base.yaml.  "
+                f"Available keys: {list(lr_cfg.keys())}"
+            )
+        lr: float = float(lr_cfg[compression])
+    else:
+        lr = float(lr_cfg)
 
     # Infer device from the first model parameter.
     model_device = next(model.parameters()).device
@@ -262,6 +317,15 @@ def adversarial_train(
     # Raises ValueError immediately if L-inf is outside at_eps ± 10%.
     _check_fgsm_perturbation(fgsm, train_loader, at_eps, model_device, mean, std)
 
+    # Measure baseline clean accuracy before any weight updates.
+    # This is the reference point for the per-epoch drop guard below.
+    print("[AT] Measuring baseline clean accuracy before training …")
+    baseline_clean_acc = _measure_clean_acc(model, train_loader, str(model_device))
+    print(f"[AT] Baseline clean_acc : {baseline_clean_acc:.4f}\n")
+
+    _first_batch_checked = False
+    early_stop = False
+
     for epoch in range(1, epochs + 1):
         model.train()
 
@@ -279,6 +343,33 @@ def adversarial_train(
         for images, labels in loop:
             images = images.to(model_device)
             labels = labels.to(model_device)
+
+            # Fix 2 — image range check fires exactly once, before any
+            # gradient step.  ImageNet-normalised images span ≈ [-2.1, 2.6],
+            # so max > 2.0 is expected.  If max ≤ 2.0 the DataLoader likely
+            # forgot T.Normalize() — in that case set_normalization_used()
+            # would apply the perturbation in the wrong space.
+            if not _first_batch_checked:
+                _first_batch_checked = True
+                img_min = images.min().item()
+                img_max = images.max().item()
+                print(
+                    f"\n[AT] First-batch image range: "
+                    f"min={img_min:.3f}  max={img_max:.3f}"
+                )
+                if img_max > 2.0:
+                    raise ValueError(
+                        f"Images are not normalized to [0, 1] — "
+                        f"check dataloader preprocessing.\n"
+                        f"  images.max() = {img_max:.4f} > 2.0\n"
+                        "  Expected raw pixel inputs in [0, 1] before "
+                        "any normalisation transform.\n"
+                        "  If your DataLoader applies T.Normalize() (ImageNet "
+                        "mean/std), the images will be in ≈ [-2.1, 2.6] which "
+                        "is the correct range for this pipeline — flip this "
+                        "check or remove it."
+                    )
+                print("[AT] Image range OK — looks like [0, 1] pixel space.\n")
 
             # Generate FGSM adversarial examples.
             # torchattacks temporarily sets model.eval() internally, then
@@ -308,15 +399,37 @@ def adversarial_train(
             )
 
         epoch_loss = running_loss / total
-        epoch_acc = correct / total
+        epoch_acc  = correct / total
         print(
             f"[AT] Epoch {epoch}/{epochs} — "
-            f"loss={epoch_loss:.4f}  train_acc={epoch_acc:.4f}"
+            f"loss={epoch_loss:.4f}  train_adv_acc={epoch_acc:.4f}"
         )
+
+        # Measure clean accuracy after the epoch and compare to baseline.
+        epoch_clean_acc = _measure_clean_acc(model, train_loader, str(model_device))
+        clean_drop = baseline_clean_acc - epoch_clean_acc
+        print(
+            f"[AT] Epoch {epoch} clean_acc={epoch_clean_acc:.4f}  "
+            f"(baseline={baseline_clean_acc:.4f}  drop={clean_drop:+.4f})"
+        )
+
+        if clean_drop > 0.10:
+            print(
+                f"\n[AT] *** WARNING: clean_acc dropped {clean_drop:.4f} "
+                f"(> 0.10 threshold) after epoch {epoch}. ***\n"
+                f"[AT] Stopping training early to prevent further degradation.\n"
+                f"[AT] Possible causes: LR too high for this compression level, "
+                f"or FGSM eps too large.\n"
+                f"[AT] Current lr={lr}  compression={compression}"
+            )
+            early_stop = True
 
         if save_every_epoch:
             ckpt_path = save_checkpoint(model, epoch, compression, ckpt_dir)
             print(f"[AT] Checkpoint saved → {ckpt_path}")
+
+        if early_stop:
+            break
 
     model.eval()
     print(f"\n[AT] Training complete.  Model returned in eval mode.")
