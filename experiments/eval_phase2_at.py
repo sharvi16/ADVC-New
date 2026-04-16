@@ -318,44 +318,68 @@ def load_at_checkpoint(
     compression: str,
     cfg: dict,
 ) -> nn.Module:
-    """Load the final AT checkpoint into an already-loaded compressed model.
+    """Load the final AT checkpoint for the given compression level.
 
-    The checkpoint is expected at:
-        {checkpoints_at_dir}/at_{compression}_epoch{epochs:02d}.pt
+    INT4 checkpoints are saved as full model objects
+    (at_{compression}_epoch{N:02d}_full_model.pt) because bitsandbytes NF4
+    embeds absmax / quant_state metadata into parameter tensors — reloading a
+    state_dict into a freshly-quantised model causes a state conflict.
 
-    This is the file written by defenses/adversarial_training.py after the
-    last training epoch.  The model must already be loaded at the correct
-    compression level before calling this function.
+    FP32 and INT8 checkpoints are saved as plain state_dicts
+    (at_{compression}_epoch{N:02d}.pt).
+
+    The function detects which format is on disk and loads accordingly.
+    For full-model checkpoints the `model` argument is ignored; a freshly
+    deserialised object is returned instead.
 
     Args:
         model:       Already-loaded (and compressed) nn.Module.
+                     Used only for state_dict loading (fp32 / int8).
         compression: Compression level string — "fp32", "int8", or "int4".
         cfg:         Parsed base.yaml config dict.
 
     Returns:
-        model: Same nn.Module with AT weights loaded, in eval mode.
+        model: nn.Module with AT weights, in eval mode.
 
     Raises:
-        FileNotFoundError: If the checkpoint file does not exist.
+        FileNotFoundError: If neither checkpoint file is found on disk.
     """
     ckpt_dir = cfg["paths"]["checkpoints_at_dir"]
     epochs: int = cfg["defense"]["epochs"]
-    filename = f"at_{compression}_epoch{epochs:02d}.pt"
-    ckpt_path = _ROOT / ckpt_dir / filename
 
-    if not ckpt_path.is_file():
-        raise FileNotFoundError(
-            f"Checkpoint not found: {ckpt_path}\n"
-            f"Run without --skip-training first to generate it, "
-            f"or check that the file was copied from Drive."
+    full_model_path  = _ROOT / ckpt_dir / f"at_{compression}_epoch{epochs:02d}_full_model.pt"
+    state_dict_path  = _ROOT / ckpt_dir / f"at_{compression}_epoch{epochs:02d}.pt"
+
+    if full_model_path.is_file():
+        # INT4: full model serialised — deserialise directly
+        print(
+            f"[phase2-AT] {compression:<6}: loading full model checkpoint "
+            f"from {full_model_path} …"
         )
+        loaded_model = torch.load(str(full_model_path), map_location="cpu")
+        loaded_model.eval()
+        print(f"[phase2-AT] {compression:<6}: full model checkpoint loaded.")
+        return loaded_model
 
-    print(f"[phase2-AT] {compression:<6}: loading checkpoint from {ckpt_path} …")
-    state_dict = torch.load(str(ckpt_path), map_location="cpu")
-    model.load_state_dict(state_dict)
-    model.eval()
-    print(f"[phase2-AT] {compression:<6}: checkpoint loaded.")
-    return model
+    if state_dict_path.is_file():
+        # FP32 / INT8: plain state_dict — load into the provided model
+        print(
+            f"[phase2-AT] {compression:<6}: loading state dict checkpoint "
+            f"from {state_dict_path} …"
+        )
+        state_dict = torch.load(str(state_dict_path), map_location="cpu")
+        model.load_state_dict(state_dict)
+        model.eval()
+        print(f"[phase2-AT] {compression:<6}: state dict checkpoint loaded.")
+        return model
+
+    raise FileNotFoundError(
+        f"No AT checkpoint found for compression='{compression}'.  Tried:\n"
+        f"  {full_model_path}\n"
+        f"  {state_dict_path}\n"
+        "Run without --skip-training first to generate the checkpoint, "
+        "or copy it from Drive."
+    )
 
 
 def main() -> None:

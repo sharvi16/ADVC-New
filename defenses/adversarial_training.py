@@ -71,7 +71,19 @@ def save_checkpoint(
     compression: str,
     checkpoint_dir: str,
 ) -> str:
-    """Save model state dict after a training epoch.
+    """Save model checkpoint after a training epoch.
+
+    INT4 models (bitsandbytes NF4) embed absmax, quant_map, and quant_state
+    metadata directly in their parameter tensors.  Saving only the state_dict
+    and reloading it into a freshly-quantised model causes a state conflict
+    because the quantisation metadata is regenerated on load.  To avoid this,
+    INT4 checkpoints save the full model object.
+
+    FP32 and INT8 models are saved as plain state_dicts (lighter, portable).
+
+    Filename convention:
+      INT4  →  at_{compression}_epoch{epoch:02d}_full_model.pt
+      other →  at_{compression}_epoch{epoch:02d}.pt
 
     Args:
         model:          The fine-tuned model.
@@ -83,9 +95,14 @@ def save_checkpoint(
         Absolute path to the saved checkpoint file.
     """
     Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
-    filename = f"at_{compression}_epoch{epoch:02d}.pt"
-    ckpt_path = os.path.join(checkpoint_dir, filename)
-    torch.save(model.state_dict(), ckpt_path)
+    if compression == "int4":
+        filename = f"at_{compression}_epoch{epoch:02d}_full_model.pt"
+        ckpt_path = os.path.join(checkpoint_dir, filename)
+        torch.save(model, ckpt_path)
+    else:
+        filename = f"at_{compression}_epoch{epoch:02d}.pt"
+        ckpt_path = os.path.join(checkpoint_dir, filename)
+        torch.save(model.state_dict(), ckpt_path)
     return os.path.abspath(ckpt_path)
 
 

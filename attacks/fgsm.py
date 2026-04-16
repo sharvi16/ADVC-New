@@ -24,6 +24,12 @@ def build_attack(
     """
     Build an FGSM attack bound to the given model.
 
+    Images fed to this attack must be ImageNet-normalised (as produced by the
+    standard torchvision transform pipeline).  set_normalization_used() tells
+    torchattacks to internally un-normalise to [0, 1] before adding the
+    perturbation, clamp to [0, 1], and re-normalise before returning.  This
+    ensures the L-inf perturbation is exactly eps in pixel space.
+
     Args:
         model:  A torch.nn.Module in eval mode.
         config: Parsed base.yaml config dict.
@@ -32,7 +38,10 @@ def build_attack(
         attack: torchattacks.FGSM instance ready for inference.
     """
     eps = config["fgsm"]["eps"]
+    mean = config["dataset"]["mean"]
+    std  = config["dataset"]["std"]
     attack = torchattacks.FGSM(model, eps=eps)
+    attack.set_normalization_used(mean=mean, std=std)
     return attack
 
 
@@ -46,12 +55,21 @@ def run_attack(
 
     Args:
         attack: A configured torchattacks.FGSM instance.
-        images: Clean input batch, shape (N, 3, H, W), values in [0, 1].
+        images: ImageNet-normalised input batch, shape (N, 3, H, W).
         labels: Ground-truth class indices, shape (N,).
 
     Returns:
-        adv_images: Adversarial batch, same shape and device as images.
+        adv_images: Adversarial batch (still normalised), same shape and
+                    device as images.  L-inf perturbation ≈ eps in [0, 1]
+                    pixel space.
     """
+    if images.max().item() > 2.0:
+        print(
+            f"[fgsm] Warning: input max={images.max().item():.3f} — "
+            "images are not in [0, 1] (likely ImageNet-normalised). "
+            "Perturbation will be applied in pixel space via "
+            "set_normalization_used()."
+        )
     adv_images = attack(images, labels)
     return adv_images
 

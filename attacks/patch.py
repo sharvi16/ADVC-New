@@ -25,13 +25,19 @@ class PatchAttack:
     Optimises a patch_size × patch_size square patch via PGD-style gradient
     ascent (sign updates, lr step size) to maximise the cross-entropy loss.
     The patch is placed at a uniformly random location for each forward call.
-    Patch pixel values are bounded to [0, 1] (valid range, pre-normalisation).
+
+    Normalisation handling: inputs are expected to be ImageNet-normalised
+    (values outside [0, 1]).  The attack internally un-normalises to [0, 1]
+    before compositing, passes re-normalised images to the model, and returns
+    re-normalised adversarial images so the output matches the input range.
 
     Args:
         model:      A torch.nn.Module in eval mode.
         patch_size: Side length of the square patch in pixels.
         steps:      Number of optimisation steps (PGD iterations).
         lr:         Step size for each gradient-sign update.
+        mean:       ImageNet normalisation mean, list of 3 floats.
+        std:        ImageNet normalisation std,  list of 3 floats.
     """
 
     def __init__(
@@ -40,11 +46,15 @@ class PatchAttack:
         patch_size: int,
         steps: int,
         lr: float,
+        mean: list,
+        std: list,
     ) -> None:
         self.model = model
         self.patch_size = patch_size
         self.steps = steps
         self.lr = lr
+        self.mean = mean
+        self.std = std
 
     def __call__(
         self,
@@ -55,11 +65,12 @@ class PatchAttack:
         Generate adversarial examples by optimising a patch placed on each image.
 
         Args:
-            images: Clean input batch, shape (N, 3, H, W), values in [0, 1].
+            images: ImageNet-normalised input batch, shape (N, 3, H, W).
             labels: Ground-truth class indices, shape (N,).
 
         Returns:
-            adv_images: Perturbed batch, same shape and device as images.
+            adv_images: Perturbed batch (still normalised), same shape and
+                        device as images.
         """
         device = images.device
         B, C, H, W = images.shape
@@ -67,6 +78,25 @@ class PatchAttack:
 
         assert ps <= H and ps <= W, (
             f"patch_size {ps} exceeds image dimensions ({H}x{W})"
+        )
+
+        # Normalisation tensors — shape (1, C, 1, 1) for broadcasting
+        mean_t = torch.tensor(self.mean, dtype=images.dtype, device=device).view(1, C, 1, 1)
+        std_t  = torch.tensor(self.std,  dtype=images.dtype, device=device).view(1, C, 1, 1)
+
+        # Warn and un-normalise to [0, 1] for patch optimisation
+        if images.max().item() > 2.0:
+            print(
+                f"[patch] Warning: input max={images.max().item():.3f} — "
+                "images are not in [0, 1] (likely ImageNet-normalised). "
+                "Un-normalising before patch optimisation."
+            )
+
+        images_unnorm = images * std_t + mean_t
+        images_unnorm = images_unnorm.clamp(0.0, 1.0)
+        assert images_unnorm.max().item() <= 1.0 + 1e-3, (
+            f"Un-normalised images still out of [0, 1]: "
+            f"max={images_unnorm.max().item():.4f}"
         )
 
         # Random top-left corner — same placement for all images in the batch
@@ -92,11 +122,12 @@ class PatchAttack:
                 (col, W - col - ps, row, H - row - ps),
             ).unsqueeze(0).expand(B, -1, -1, -1)  # (B, C, H, W)
 
-            # Composite: patch region gets patch values, rest stays clean
-            adv = images.detach() * (1.0 - mask) + patch_full * mask
-            adv = adv.clamp(0.0, 1.0)
+            # Composite in [0, 1] space, re-normalise for model forward pass
+            adv_unnorm = images_unnorm.detach() * (1.0 - mask) + patch_full * mask
+            adv_unnorm = adv_unnorm.clamp(0.0, 1.0)
+            adv_norm = (adv_unnorm - mean_t) / std_t
 
-            logits = self.model(adv)
+            logits = self.model(adv_norm)
             loss = F.cross_entropy(logits, labels)
             loss.backward()
 
@@ -104,14 +135,15 @@ class PatchAttack:
                 patch.data.add_(self.lr * patch.grad.sign())
                 patch.data.clamp_(0.0, 1.0)
 
-        # Final composite with optimised patch — no gradient tracking needed
+        # Final composite — return re-normalised images to match input range
         with torch.no_grad():
             patch_full = F.pad(
                 patch,
                 (col, W - col - ps, row, H - row - ps),
             ).unsqueeze(0).expand(B, -1, -1, -1)
-            adv_images = images * (1.0 - mask) + patch_full * mask
-            adv_images = adv_images.clamp(0.0, 1.0)
+            adv_unnorm = images_unnorm * (1.0 - mask) + patch_full * mask
+            adv_unnorm = adv_unnorm.clamp(0.0, 1.0)
+            adv_images = (adv_unnorm - mean_t) / std_t  # re-normalise
 
         return adv_images
 
@@ -131,11 +163,15 @@ def build_attack(
         attack: PatchAttack instance ready for inference.
     """
     patch_cfg = config["patch"]
+    mean = config["dataset"]["mean"]
+    std  = config["dataset"]["std"]
     return PatchAttack(
         model=model,
         patch_size=patch_cfg["patch_size"],
         steps=patch_cfg["steps"],
         lr=patch_cfg["lr"],
+        mean=mean,
+        std=std,
     )
 
 
