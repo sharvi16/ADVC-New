@@ -144,6 +144,7 @@ def build_val_loader(cfg: dict, device: str) -> DataLoader:
     rng.manual_seed(cfg["seed"])
     n = min(ds_cfg["val_subset_size"], len(full_dataset))
     indices = torch.randperm(len(full_dataset), generator=rng)[:n].tolist()
+    print(f"[phase1] Val subset : {n} images, seed={cfg['seed']}, first 5 indices={indices[:5]}")
     subset = Subset(full_dataset, indices)
 
     loader = DataLoader(
