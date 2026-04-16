@@ -95,6 +95,20 @@ for f in ['phase1_results.csv', 'phase2_at_results.csv',
     if os.path.exists(src):
         shutil.copy(src, f'results/{f}')
         print(f'Restored {f}')
+
+# Cell 6 — copy dataset to local NVMe (REQUIRED — do not skip)
+# Reading images directly from Drive is ~100x slower than local disk.
+# Scripts use paths relative to the project root, so copying here makes
+# data/imagenet/train and data/imagenet/val resolve to local NVMe automatically.
+import shutil, os
+drive_data = '/content/drive/MyDrive/research/data/imagenet'
+local_data = '/content/ADVC/data/imagenet'
+if not os.path.exists(local_data):
+    print("Copying dataset from Drive to local NVMe — this takes ~2 min...")
+    shutil.copytree(drive_data, local_data)
+    print("Done. Data is now on local disk.")
+else:
+    print("Dataset already on local disk — skipping copy.")
 ```
 
 ### After every run — back up immediately
