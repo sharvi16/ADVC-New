@@ -14,7 +14,9 @@ Already-written rows are detected on startup and skipped, so the script is safe
 to interrupt and re-run (resumable).
 
 Usage:
-    python experiments/eval_phase2_at.py [--model deit_small]
+    python experiments/eval_phase2_at.py                          # all compression levels
+    python experiments/eval_phase2_at.py --compression int8       # one level only
+    python experiments/eval_phase2_at.py --compression fp32 --skip-training
 """
 
 import argparse
@@ -402,6 +404,12 @@ def main() -> None:
             "run and you only want to re-evaluate the defended model."
         ),
     )
+    parser.add_argument(
+        "--compression",
+        choices=["fp32", "int8", "int4"],
+        default=None,
+        help="Run only this compression level. Default runs all three.",
+    )
     args = parser.parse_args()
     model_name: str = args.model
     skip_training: bool = args.skip_training
@@ -425,7 +433,8 @@ def main() -> None:
             "skipping those.\n"
         )
 
-    compression_levels: list[str] = cfg["compression"]["levels"]
+    all_levels: list[str] = cfg["compression"]["levels"]
+    compression_levels: list[str] = [args.compression] if args.compression else all_levels
 
     for compression in compression_levels:
         remaining = [
