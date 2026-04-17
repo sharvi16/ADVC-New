@@ -20,6 +20,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
+from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 
 # Resolve project root so sibling packages import cleanly whether this module
@@ -390,9 +391,17 @@ def adversarial_train(
     _check_fgsm_perturbation(fgsm, train_loader, at_eps, model_device, mean, std)
 
     # Measure baseline clean accuracy before any weight updates.
-    # This is the reference point for the per-epoch drop guard below.
-    print("[AT] Measuring baseline clean accuracy before training …")
-    baseline_clean_acc = _measure_clean_acc(model, train_loader, str(model_device))
+    # Use a fixed 500-image subset — the full train loader (10 000 images) hangs
+    # for 10+ minutes; 500 images give a reliable estimate in a few seconds.
+    print("[AT] Measuring baseline clean accuracy (500-image subset) …")
+    baseline_loader = DataLoader(
+        Subset(train_loader.dataset, range(500)),
+        batch_size=64,
+        shuffle=False,
+        num_workers=train_loader.num_workers,
+        pin_memory=train_loader.pin_memory,
+    )
+    baseline_clean_acc = _measure_clean_acc(model, baseline_loader, str(model_device))
     print(f"[AT] Baseline clean_acc : {baseline_clean_acc:.4f}\n")
 
     _first_batch_checked = False
