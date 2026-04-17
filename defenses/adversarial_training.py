@@ -230,58 +230,55 @@ def save_checkpoint(
 def _freeze_backbone(model: nn.Module) -> None:
     """Freeze all layers, then unfreeze the last 4 transformer blocks and head.
 
-    Handles both timm FP32 models (model.blocks / model.head) and HuggingFace
-    DeiT models (model.deit.encoder.layer / model.classifier).  Falls back to
-    unfreezing everything if the architecture is not recognised.
+    Handles HuggingFace ViT models (model.vit.encoder.layer / model.classifier),
+    HuggingFace models with model.encoder.layer, and timm FP32 models
+    (model.blocks / model.head).
 
-    For bitsandbytes quantised parameters that do not support gradients the
-    unfreeze step is skipped silently so that the rest of training can proceed.
+    Only float parameters (fp32, fp16, bf16) have requires_grad set — integer
+    quantised weights from bitsandbytes cannot carry gradients and are skipped.
 
     Args:
         model: The compressed model whose backbone should be frozen.
+
+    Raises:
+        ValueError: If the model architecture cannot be detected.
     """
-    # Freeze everything first.
-    for param in model.parameters():
-        param.requires_grad = False
-
-    blocks_to_unfreeze: list = []
-    head_modules: list = []
-
-    # timm DeiT-S FP32: model.blocks (Sequential of 12), model.norm, model.head
-    if hasattr(model, "blocks"):
-        all_blocks = list(model.blocks)
-        blocks_to_unfreeze = all_blocks[-4:]
-        if hasattr(model, "norm"):
-            head_modules.append(model.norm)
-        if hasattr(model, "head"):
-            head_modules.append(model.head)
-
-    # HuggingFace DeiT (INT8 / INT4): model.deit.encoder.layer, model.classifier
-    elif hasattr(model, "deit") and hasattr(model.deit, "encoder"):
-        all_layers = list(model.deit.encoder.layer)
-        blocks_to_unfreeze = all_layers[-4:]
-        if hasattr(model, "classifier"):
-            head_modules.append(model.classifier)
-
+    # Detect architecture and get the list of transformer blocks.
+    # Try HuggingFace ViT structure first (INT8/INT4 via bitsandbytes).
+    if hasattr(model, "vit") and hasattr(model.vit, "encoder"):
+        blocks = model.vit.encoder.layer
+    # Fall back to HuggingFace models with top-level encoder.
+    elif hasattr(model, "encoder") and hasattr(model.encoder, "layer"):
+        blocks = model.encoder.layer
+    # timm DeiT-S FP32: model.blocks is a Sequential of 12 transformer blocks.
+    elif hasattr(model, "blocks"):
+        blocks = model.blocks
     else:
-        print("[AT] WARNING: unrecognised model architecture — unfreezing all parameters.")
-        for param in model.parameters():
-            param.requires_grad = True
-        return
+        raise ValueError(
+            "[AT] Cannot detect model architecture for layer freezing.  "
+            "Expected model.vit.encoder.layer, model.encoder.layer, or model.blocks."
+        )
 
-    for module in blocks_to_unfreeze + head_modules:
-        for param in module.parameters():
-            try:
+    # Freeze all float params first — integer quantised params are left alone.
+    for param in model.parameters():
+        if param.dtype in (torch.float32, torch.float16, torch.bfloat16):
+            param.requires_grad = False
+
+    # Unfreeze last 4 blocks — float params only.
+    for block in list(blocks)[-4:]:
+        for param in block.parameters():
+            if param.dtype in (torch.float32, torch.float16, torch.bfloat16):
                 param.requires_grad = True
-            except RuntimeError:
-                pass  # quantised params that don't support grad — skip silently
+
+    # Unfreeze classifier head — float params only.
+    for name, param in model.named_parameters():
+        if "classifier" in name or "head" in name:
+            if param.dtype in (torch.float32, torch.float16, torch.bfloat16):
+                param.requires_grad = True
 
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total     = sum(p.numel() for p in model.parameters())
-    print(
-        f"[AT] Layer freeze : last 4 blocks + head unfrozen → "
-        f"{trainable / 1e6:.2f}M / {total / 1e6:.2f}M params trainable"
-    )
+    print(f"[AT] Trainable params: {trainable:,} / {total:,} ({100 * trainable / total:.1f}%)")
 
 
 # ---------------------------------------------------------------------------
