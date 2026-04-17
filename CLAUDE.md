@@ -67,6 +67,13 @@ Measure and save results
 
 ### Colab session startup (run every session)
 
+> **HF_TOKEN required before any model load.**
+> `facebook/deit-small-patch16-224` requires a HuggingFace token for INT8/INT4
+> loading via `AutoModelForImageClassification`.  Add your token to Colab Secrets
+> (key icon in the left sidebar) with the name `HF_TOKEN`, then expose it via
+> `userdata.get('HF_TOKEN')` as the very first line of Cell 2 — before pip install.
+> Without this, `from_pretrained` will fail with a 401 authentication error.
+
 ```python
 # Cell 1 — verify A100
 import torch
@@ -74,7 +81,10 @@ print(torch.cuda.is_available())
 print(torch.cuda.get_device_name(0))   # should say A100
 print(f"{torch.cuda.mem_get_info()[0]/1e9:.1f} GB free")
 
-# Cell 2 — install dependencies
+# Cell 2 — set HF token, then install dependencies
+import os
+from google.colab import userdata
+os.environ['HF_TOKEN'] = userdata.get('HF_TOKEN')
 !pip install -q timm torchattacks bitsandbytes optimum pyyaml
 
 # Cell 3 — mount Drive
