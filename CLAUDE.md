@@ -1,4 +1,65 @@
-# CLAUDE.md — Adversarial Robustness Under Compression for Edge ViTs
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+---
+
+## Quick reference for Claude Code
+
+### Running experiments (on Colab — scripts are not meant to run locally)
+
+```bash
+# Phase 1 — baseline, no defense
+python experiments/eval_phase1.py --model deit_small
+
+# Phase 2a — AT defense (trains then evaluates; use --skip-training to load checkpoint)
+python experiments/eval_phase2_at.py --model deit_small [--skip-training] [--compression fp32|int8|int4]
+
+# Phase 2b — AT+KD defense
+python experiments/eval_phase2_atkd.py --model deit_small [--skip-training] [--compression fp32|int8|int4]
+
+# Phase 3 — combined attack (eval_phase3.py not yet built — see build order below)
+python experiments/eval_phase3.py --model deit_small
+```
+
+### Attack interface (every attack must match this signature)
+
+```python
+attack(model, images, labels) -> perturbed_images   # Tensor, same shape as images
+```
+
+`build_attack(model, config)` returns the callable; `run_attack(attack, images, labels)` is the uniform wrapper.
+
+### Adding a new attack or experiment
+
+1. Read `attacks/fgsm.py` as the canonical template — same structure for every attack.
+2. Pull all params from `configs/base.yaml` — never hardcode epsilon, steps, patch size, etc.
+3. Include a `if __name__ == "__main__":` sanity-check block (dummy forward pass).
+4. For experiment scripts, copy the resumability pattern from `experiments/eval_phase1.py:load_completed_runs()`.
+
+### Key invariants the code enforces
+
+- **Compress before defend** — model is always quantized before AT or AT+KD fine-tuning.
+- **Teacher always frozen** — `teacher.eval()` + `torch.no_grad()` on every teacher forward in `defenses/at_kd.py`.
+- **INT4 checkpoints save the full model** (not state_dict) because `bitsandbytes` NF4 weights can't be loaded with `load_state_dict` alone — see `save_checkpoint()` in both defense files.
+- **LogitsWrapper** — HuggingFace model outputs are dataclasses; both defense files and phase1 wrap models with `_LogitsWrapper` so downstream code receives plain tensors.
+- **Per-compression learning rates** in `configs/base.yaml` (`at.lr_per_compression`) — INT4 gets 10× lower LR than FP32 to avoid destroying fragile quantized weights.
+
+### Architecture in one paragraph
+
+`models/loader.py` loads DeiT-S at fp32/int8/int4 via timm + bitsandbytes and returns an eval-mode model. `attacks/` wraps torchattacks (FGSM, PGD) or provides a custom class (PatchAttack); each file is standalone with its own config loader. `defenses/` fine-tunes the already-compressed model: AT with FGSM adversarial inputs only, AT+KD adding a frozen FP32 teacher KL loss. `experiments/` scripts wire the pieces together in loops over compression levels and attacks, appending to CSV immediately after each row via `utils/metrics.py:save_results_to_csv()`. All hyperparameters live exclusively in `configs/base.yaml`.
+
+### Files not yet built (build in this order)
+
+```
+attacks/combined.py          # chains fgsm → pgd → patch sequentially
+experiments/eval_phase3.py   # combined attack × all defenses → phase3_results.csv
+notebooks/01_results_viz.ipynb
+```
+
+---
+
+# Research spec — Adversarial Robustness Under Compression for Edge ViTs
 
 ## Project overview
 

@@ -18,7 +18,9 @@ Already-written rows are detected on startup and skipped, so the script is safe
 to interrupt and re-run (resumable).
 
 Usage:
-    python experiments/eval_phase2_atkd.py [--model deit_small]
+    python experiments/eval_phase2_atkd.py                          # all compression levels
+    python experiments/eval_phase2_atkd.py --compression int8       # one level only
+    python experiments/eval_phase2_atkd.py --compression fp32 --skip-training
 """
 
 import argparse
@@ -142,13 +144,16 @@ def build_val_loader(cfg: dict, device: str) -> DataLoader:
         T.Normalize(mean=ds_cfg["mean"], std=ds_cfg["std"]),
     ])
 
-    full_dataset = ImageFolder(root=str(_ROOT / ds_cfg["val_dir"]), transform=transform)
+    val_path = _ROOT / ds_cfg["val_dir"]
+    print(f"[phase2-ATKD] val_dir   : {val_path}")
+    full_dataset = ImageFolder(root=str(val_path), transform=transform)
     full_dataset = _remap_subset_labels(full_dataset)
 
     rng = torch.Generator()
     rng.manual_seed(cfg["seed"])
     n = min(ds_cfg["val_subset_size"], len(full_dataset))
     indices = torch.randperm(len(full_dataset), generator=rng)[:n].tolist()
+    print(f"[phase2-ATKD] Val subset : {n} images, seed={cfg['seed']}, first 5 indices={indices[:5]}")
     subset = Subset(full_dataset, indices)
 
     return DataLoader(
@@ -176,7 +181,9 @@ def build_train_loader(cfg: dict, device: str) -> DataLoader:
         T.Normalize(mean=ds_cfg["mean"], std=ds_cfg["std"]),
     ])
 
-    full_dataset = ImageFolder(root=str(_ROOT / ds_cfg["train_dir"]), transform=transform)
+    train_path = _ROOT / ds_cfg["train_dir"]
+    print(f"[phase2-ATKD] train_dir : {train_path}")
+    full_dataset = ImageFolder(root=str(train_path), transform=transform)
     full_dataset = _remap_subset_labels(full_dataset)
 
     rng = torch.Generator()
@@ -317,6 +324,75 @@ def print_summary(results_path: str, model_name: str) -> None:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+def load_atkd_checkpoint(
+    model: nn.Module,
+    compression: str,
+    cfg: dict,
+) -> nn.Module:
+    """Load the final AT+KD checkpoint for the given compression level.
+
+    INT4 checkpoints are saved as full model objects
+    (atkd_{compression}_epoch{N:02d}_full_model.pt) because bitsandbytes NF4
+    embeds absmax / quant_state metadata into parameter tensors — reloading a
+    state_dict into a freshly-quantised model causes a state conflict.
+
+    FP32 and INT8 checkpoints are saved as plain state_dicts
+    (atkd_{compression}_epoch{N:02d}.pt).
+
+    The function detects which format is on disk and loads accordingly.
+    For full-model checkpoints the `model` argument is ignored; a freshly
+    deserialised object is returned instead.
+
+    Args:
+        model:       Already-loaded (and compressed) nn.Module.
+                     Used only for state_dict loading (fp32 / int8).
+        compression: Compression level string — "fp32", "int8", or "int4".
+        cfg:         Parsed base.yaml config dict.
+
+    Returns:
+        model: nn.Module with AT+KD weights, in eval mode.
+
+    Raises:
+        FileNotFoundError: If neither checkpoint file is found on disk.
+    """
+    ckpt_dir = cfg["paths"]["checkpoints_atkd_dir"]
+    epochs: int = cfg["defense"]["epochs"]
+
+    full_model_path = _ROOT / ckpt_dir / f"atkd_{compression}_epoch{epochs:02d}_full_model.pt"
+    state_dict_path = _ROOT / ckpt_dir / f"atkd_{compression}_epoch{epochs:02d}.pt"
+
+    if full_model_path.is_file():
+        # INT4: full model serialised — deserialise directly
+        print(
+            f"[phase2-ATKD] {compression:<6}: loading full model checkpoint "
+            f"from {full_model_path} …"
+        )
+        loaded_model = torch.load(str(full_model_path), map_location="cpu")
+        loaded_model.eval()
+        print(f"[phase2-ATKD] {compression:<6}: full model checkpoint loaded.")
+        return loaded_model
+
+    if state_dict_path.is_file():
+        # FP32 / INT8: plain state_dict — load into the provided model
+        print(
+            f"[phase2-ATKD] {compression:<6}: loading state dict checkpoint "
+            f"from {state_dict_path} …"
+        )
+        state_dict = torch.load(str(state_dict_path), map_location="cpu")
+        model.load_state_dict(state_dict)
+        model.eval()
+        print(f"[phase2-ATKD] {compression:<6}: state dict checkpoint loaded.")
+        return model
+
+    raise FileNotFoundError(
+        f"No AT+KD checkpoint found for compression='{compression}'.  Tried:\n"
+        f"  {full_model_path}\n"
+        f"  {state_dict_path}\n"
+        "Run without --skip-training first to generate the checkpoint, "
+        "or copy it from Drive."
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Phase 2b — AT+KD defense sweep: compression × attack."
@@ -327,19 +403,36 @@ def main() -> None:
         choices=["deit_small"],
         help="Model to evaluate (default: deit_small)",
     )
+    parser.add_argument(
+        "--skip-training",
+        action="store_true",
+        help=(
+            "Skip AT+KD fine-tuning and load the saved final-epoch checkpoint "
+            "from results/checkpoints/atkd/ instead.  Useful when AT+KD has already "
+            "run and you only want to re-evaluate the defended student."
+        ),
+    )
+    parser.add_argument(
+        "--compression",
+        choices=["fp32", "int8", "int4"],
+        default=None,
+        help="Run only this compression level. Default runs all three.",
+    )
     args = parser.parse_args()
     model_name: str = args.model
+    skip_training: bool = args.skip_training
 
     cfg = load_config(str(_ROOT / "configs/base.yaml"))
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    print(f"[phase2-ATKD] device      : {device}")
-    print(f"[phase2-ATKD] model       : {model_name}")
-    print(f"[phase2-ATKD] results     : {RESULTS_FILE}")
+    print(f"[phase2-ATKD] device        : {device}")
+    print(f"[phase2-ATKD] model         : {model_name}")
+    print(f"[phase2-ATKD] results       : {RESULTS_FILE}")
+    print(f"[phase2-ATKD] skip-training : {skip_training}")
     print()
 
     val_loader = build_val_loader(cfg, device)
-    train_loader = build_train_loader(cfg, device)
+    train_loader = build_train_loader(cfg, device) if not skip_training else None
     completed = load_completed_runs(RESULTS_FILE)
 
     if completed:
@@ -358,7 +451,8 @@ def main() -> None:
     teacher_device = infer_model_device(teacher)
     print(f"[phase2-ATKD] Teacher on {teacher_device} (frozen)\n")
 
-    compression_levels: list[str] = cfg["compression"]["levels"]
+    all_levels: list[str] = cfg["compression"]["levels"]
+    compression_levels: list[str] = [args.compression] if args.compression else all_levels
 
     for compression in compression_levels:
         remaining = [
@@ -381,23 +475,35 @@ def main() -> None:
             print(f"[phase2-ATKD] {compression:<6}: load failed — {exc}")
             continue
 
-        # ── Apply AT+KD defense ────────────────────────────────────────────────
-        print(f"[phase2-ATKD] {compression:<6}: applying AT+KD …")
-        try:
-            raw_student = at_kd_train(
-                raw_student, teacher, train_loader, cfg, compression=compression
-            )
-        except Exception as exc:
-            print(f"[phase2-ATKD] {compression:<6}: AT+KD failed — {exc}")
-            del raw_student
-            if device == "cuda":
-                torch.cuda.empty_cache()
-            continue
+        # ── Apply AT+KD defense (or load saved checkpoint) ────────────────────
+        if skip_training:
+            print(f"[phase2-ATKD] {compression:<6}: --skip-training set, loading checkpoint …")
+            try:
+                raw_student = load_atkd_checkpoint(raw_student, compression, cfg)
+            except Exception as exc:
+                print(f"[phase2-ATKD] {compression:<6}: checkpoint load failed — {exc}")
+                del raw_student
+                if device == "cuda":
+                    torch.cuda.empty_cache()
+                continue
+        else:
+            print(f"[phase2-ATKD] {compression:<6}: applying AT+KD …")
+            try:
+                raw_student = at_kd_train(
+                    raw_student, teacher, train_loader, cfg, compression=compression
+                )
+            except Exception as exc:
+                print(f"[phase2-ATKD] {compression:<6}: AT+KD failed — {exc}")
+                del raw_student
+                if device == "cuda":
+                    torch.cuda.empty_cache()
+                continue
 
         student = LogitsWrapper(raw_student)
         student.eval()
         student_device = infer_model_device(raw_student)
-        print(f"[phase2-ATKD] {compression:<6}: student on {student_device} (post-AT+KD)")
+        mode_label = "checkpoint" if skip_training else "post-AT+KD"
+        print(f"[phase2-ATKD] {compression:<6}: student on {student_device} ({mode_label})")
 
         # ── Clean accuracy (computed once, reused for all attacks) ────────────
         print(f"[phase2-ATKD] {compression:<6}: evaluating clean accuracy …")
