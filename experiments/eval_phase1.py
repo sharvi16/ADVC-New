@@ -157,6 +157,47 @@ def build_val_loader(cfg: dict, device: str) -> DataLoader:
     return loader
 
 
+def build_patch_val_loader(cfg: dict, device: str) -> DataLoader:
+    """Build a smaller validation loader used exclusively for the patch attack.
+
+    The patch attack runs 150 PGD-style optimisation steps per batch, making
+    it ~7.5× more expensive than FGSM/PGD.  Using 500 images instead of the
+    full val subset keeps patch evaluation within the Colab CU budget while
+    still producing a statistically meaningful ASR estimate.
+    FGSM and PGD always use the full val_subset_size loader.
+    """
+    ds_cfg = cfg["dataset"]
+    eval_cfg = cfg["eval"]
+
+    transform = T.Compose([
+        T.Resize(256),
+        T.CenterCrop(ds_cfg["image_size"]),
+        T.ToTensor(),
+        T.Normalize(mean=ds_cfg["mean"], std=ds_cfg["std"]),
+    ])
+
+    full_dataset = ImageFolder(root=str(_ROOT / ds_cfg["val_dir"]), transform=transform)
+    full_dataset = _remap_subset_labels(full_dataset)
+
+    # Draw from the same shuffled order as build_val_loader so the 500 images
+    # are a strict prefix of the full val subset — results stay comparable.
+    rng = torch.Generator()
+    rng.manual_seed(cfg["seed"])
+    n_full = min(ds_cfg["val_subset_size"], len(full_dataset))
+    full_indices = torch.randperm(len(full_dataset), generator=rng)[:n_full].tolist()
+    patch_indices = full_indices[:500]
+    print(f"[phase1] Patch val subset : 500 images (subset of full {n_full}), seed={cfg['seed']}")
+    subset = Subset(full_dataset, patch_indices)
+
+    return DataLoader(
+        subset,
+        batch_size=eval_cfg["batch_size"],
+        shuffle=False,
+        num_workers=eval_cfg["num_workers"],
+        pin_memory=(device == "cuda"),
+    )
+
+
 # ── Resumability helpers ──────────────────────────────────────────────────────
 
 def load_completed_runs(results_path: str) -> set:
@@ -300,6 +341,7 @@ def main() -> None:
     print()
 
     loader = build_val_loader(cfg, device)
+    patch_loader = build_patch_val_loader(cfg, device)
     completed = load_completed_runs(RESULTS_FILE)
 
     if completed:
@@ -345,6 +387,28 @@ def main() -> None:
         for attack_name in remaining:
             print(f"[phase1] {compression:<6} × {attack_name:<5}: building attack …")
 
+            # Patch attack is evaluated on a smaller 500-image subset because
+            # each batch requires 150 PGD optimisation steps, making it far
+            # more expensive than FGSM/PGD.  FGSM and PGD use the full loader.
+            if attack_name == "patch":
+                eval_loader = patch_loader
+                # Re-collect clean logits/labels for the 500-image subset so
+                # that clean_acc and robustness_gap are computed on the same
+                # images as the adversarial evaluation.
+                try:
+                    patch_clean_logits, patch_clean_labels = run_clean_eval(
+                        model, patch_loader, model_device
+                    )
+                except Exception as exc:
+                    print(f"[phase1] {compression:<6} × patch  : patch clean eval failed — {exc}")
+                    continue
+                eval_clean_logits = patch_clean_logits
+                eval_clean_labels = patch_clean_labels
+            else:
+                eval_loader = loader
+                eval_clean_logits = clean_logits
+                eval_clean_labels = clean_labels
+
             if attack_name == "fgsm":
                 attack = fgsm_mod.build_attack(model, cfg)
             elif attack_name == "pgd":
@@ -354,16 +418,16 @@ def main() -> None:
             else:
                 raise ValueError(f"Unknown attack: {attack_name!r}")
 
-            print(f"[phase1] {compression:<6} × {attack_name:<5}: running on {len(loader.dataset)} images …")
+            print(f"[phase1] {compression:<6} × {attack_name:<5}: running on {len(eval_loader.dataset)} images …")
             try:
-                adv_logits = run_adv_eval(attack, model, loader, model_device)
+                adv_logits = run_adv_eval(attack, model, eval_loader, model_device)
             except Exception as exc:
                 print(f"[phase1] {compression:<6} × {attack_name:<5}: attack failed — {exc}")
                 continue
 
-            rob_acc = robust_accuracy(adv_logits, clean_labels)
-            asr = attack_success_rate(adv_logits, clean_labels)
-            rob_gap = robustness_gap(clean_logits, adv_logits, clean_labels)
+            rob_acc = robust_accuracy(adv_logits, eval_clean_labels)
+            asr = attack_success_rate(adv_logits, eval_clean_labels)
+            rob_gap = robustness_gap(eval_clean_logits, adv_logits, eval_clean_labels)
 
             print(
                 f"[phase1] {compression:<6} × {attack_name:<5}: "
