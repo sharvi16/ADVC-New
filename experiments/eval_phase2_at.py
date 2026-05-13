@@ -466,7 +466,7 @@ def main() -> None:
 
     val_loader = build_val_loader(cfg, device)
     patch_val_loader = build_patch_val_loader(cfg, device)
-    train_loader = build_train_loader(cfg, device) if not skip_training else None
+    train_loader = None if skip_training else build_train_loader(cfg, device)
     completed = load_completed_runs(RESULTS_FILE)
 
     if completed:
@@ -607,9 +607,16 @@ def main() -> None:
                 f"robust_acc={rob_acc:.4f}  asr={asr:.4f}  gap={rob_gap:.4f}"
             )
 
+            # For patch, use the 500-image clean_acc so all four metrics
+            # share the same denominator (patch_clean_logits / patch_clean_labels).
+            row_c_acc = (
+                clean_accuracy(eval_clean_logits, eval_clean_labels)
+                if attack_name == "patch"
+                else c_acc
+            )
             append_row(
                 RESULTS_FILE, model_name, compression, attack_name,
-                c_acc, rob_acc, asr, rob_gap,
+                row_c_acc, rob_acc, asr, rob_gap,
             )
             print(
                 f"[phase2-AT] {compression:<6} × {attack_name:<5}: "
