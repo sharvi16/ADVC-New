@@ -404,6 +404,16 @@ def adversarial_train(
     baseline_clean_acc = _measure_clean_acc(model, baseline_loader, str(model_device))
     print(f"[AT] Baseline clean_acc : {baseline_clean_acc:.4f}\n")
 
+    # 500-image subset loader for per-epoch clean-acc checks — avoids the
+    # 10+ minute hang that occurs when running _measure_clean_acc on all 10k images.
+    epoch_clean_loader = DataLoader(
+        Subset(train_loader.dataset, range(500)),
+        batch_size=64,
+        shuffle=False,
+        num_workers=train_loader.num_workers,
+        pin_memory=train_loader.pin_memory,
+    )
+
     _first_batch_checked = False
 
     for epoch in range(1, epochs + 1):
@@ -475,7 +485,7 @@ def adversarial_train(
         )
 
         # Measure clean accuracy after the epoch and compare to baseline.
-        epoch_clean_acc = _measure_clean_acc(model, train_loader, str(model_device))
+        epoch_clean_acc = _measure_clean_acc(model, epoch_clean_loader, str(model_device))
         clean_drop = baseline_clean_acc - epoch_clean_acc
         print(
             f"[AT] Epoch {epoch} clean_acc={epoch_clean_acc:.4f}  "
