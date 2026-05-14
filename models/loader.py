@@ -96,10 +96,12 @@ def _load_int8(timm_name: str, config: dict, device: str) -> torch.nn.Module:
             # it must be passed via BitsAndBytesConfig instead.
             bnb_config = BitsAndBytesConfig(load_in_8bit=True)
 
+            import os
             model = AutoModelForImageClassification.from_pretrained(
                 hf_name,
                 quantization_config=bnb_config,
                 device_map="auto",
+                token=os.environ.get("HF_TOKEN"),
             )
             return model
 
@@ -142,10 +144,12 @@ def _load_int4(timm_name: str, config: dict, device: str) -> torch.nn.Module:
 
     hf_name = _get_hf_name(timm_name, config)
 
+    import os
     model = AutoModelForImageClassification.from_pretrained(
         hf_name,
         quantization_config=bnb_config,
         device_map="auto",
+        token=os.environ.get("HF_TOKEN"),
     )
     return model
 
