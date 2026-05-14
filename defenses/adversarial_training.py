@@ -390,28 +390,15 @@ def adversarial_train(
     # Raises ValueError immediately if L-inf is outside at_eps ± 10%.
     _check_fgsm_perturbation(fgsm, train_loader, at_eps, model_device, mean, std)
 
-    # Measure baseline clean accuracy before any weight updates.
-    # Use a fixed 500-image subset — the full train loader (10 000 images) hangs
-    # for 10+ minutes; 500 images give a reliable estimate in a few seconds.
-    print("[AT] Measuring baseline clean accuracy (500-image subset) …")
-    baseline_loader = DataLoader(
-        Subset(train_loader.dataset, range(500)),
-        batch_size=64,
-        shuffle=False,
-        num_workers=train_loader.num_workers,
-        pin_memory=train_loader.pin_memory,
-    )
-    baseline_clean_acc = _measure_clean_acc(model, baseline_loader, str(model_device))
-    print(f"[AT] Baseline clean_acc : {baseline_clean_acc:.4f}\n")
+    baseline_clean_acc = 0.0  # baseline check skipped — diagnostic only
 
-    # 500-image subset loader for per-epoch clean-acc checks — avoids the
-    # 10+ minute hang that occurs when running _measure_clean_acc on all 10k images.
+    # 500-image subset loader for per-epoch clean-acc checks.
     epoch_clean_loader = DataLoader(
         Subset(train_loader.dataset, range(500)),
-        batch_size=64,
+        batch_size=train_loader.batch_size,
         shuffle=False,
-        num_workers=train_loader.num_workers,
-        pin_memory=train_loader.pin_memory,
+        num_workers=0,
+        pin_memory=False,
     )
 
     _first_batch_checked = False

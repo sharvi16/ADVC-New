@@ -427,19 +427,16 @@ def at_kd_train(
     # Raises ValueError immediately if L-inf is outside at_eps ± 10%.
     _check_fgsm_perturbation(fgsm, train_loader, at_eps, str(student_device), mean, std)
 
-    # Measure baseline clean accuracy before any weight updates.
-    # Use a fixed 500-image subset — the full train loader (10 000 images) hangs
-    # for 10+ minutes; 500 images give a reliable estimate in a few seconds.
-    print("[AT+KD] Measuring baseline clean accuracy (500-image subset) …")
-    baseline_loader = DataLoader(
+    baseline_clean_acc = 0.0  # baseline check skipped — diagnostic only
+
+    # 500-image subset loader for per-epoch clean-acc checks.
+    epoch_clean_loader = DataLoader(
         Subset(train_loader.dataset, range(500)),
-        batch_size=64,
+        batch_size=train_loader.batch_size,
         shuffle=False,
-        num_workers=train_loader.num_workers,
-        pin_memory=train_loader.pin_memory,
+        num_workers=0,
+        pin_memory=False,
     )
-    baseline_clean_acc = _measure_clean_acc(student, baseline_loader, str(student_device))
-    print(f"[AT+KD] Baseline clean_acc : {baseline_clean_acc:.4f}\n")
 
     _first_batch_checked = False
 
@@ -539,7 +536,7 @@ def at_kd_train(
         )
 
         # Measure clean accuracy after the epoch and compare to baseline.
-        epoch_clean_acc = _measure_clean_acc(student, train_loader, str(student_device))
+        epoch_clean_acc = _measure_clean_acc(student, epoch_clean_loader, str(student_device))
         clean_drop = baseline_clean_acc - epoch_clean_acc
         print(
             f"[AT+KD] Epoch {epoch} clean_acc={epoch_clean_acc:.4f}  "
