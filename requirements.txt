@@ -1,8 +1,8 @@
 # requirements.txt
 # Install with: pip install -r requirements.txt
 #
-# Note: torch and torchvision are pre-installed in Colab.
-# If running locally, uncomment the torch lines and match your CUDA version.
+# Note: verify the torch/torchvision build matches the lab server's CUDA driver.
+# If not already present, uncomment the torch lines and match your CUDA version.
 # See: https://pytorch.org/get-started/locally/
 
 # ── Core deep learning ────────────────────────────────────────────────────────
@@ -23,8 +23,8 @@ bitsandbytes>=0.41.0         # INT8 and NF4 (INT4) post-training quantization
 torchattacks>=3.4.0          # FGSM and PGD wrappers
 
 # ── Data ──────────────────────────────────────────────────────────────────────
-datasets>=2.14.0             # HuggingFace datasets — used in setup_data_colab.py
-Pillow>=9.0.0                # image I/O in setup_data_colab.py
+datasets>=2.14.0             # HuggingFace datasets
+Pillow>=9.0.0                # image I/O
 
 # ── Config ────────────────────────────────────────────────────────────────────
 PyYAML>=6.0                  # load configs/base.yaml

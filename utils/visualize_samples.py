@@ -6,7 +6,7 @@ Generates paper-quality side-by-side visualisation panels comparing:
   2. Pre-compression vs post-compression images (pixel-level difference)
 
 All panels are saved to results/figures/ as high-DPI PNGs suitable for
-inclusion in a research paper.  Never calls plt.show() — Colab-safe.
+inclusion in a research paper.  Never calls plt.show() — headless-safe.
 
 Usage:
     python utils/visualize_samples.py                        # all combos
@@ -327,7 +327,7 @@ def main() -> None:
         "--model", default="deit_small", choices=["deit_small"],
     )
     parser.add_argument(
-        "--compression", choices=["fp32", "int8", "int4"], default=None,
+        "--compression", choices=["int8", "int4"], default=None,
         help="Restrict to one compression level (default: all three).",
     )
     parser.add_argument(

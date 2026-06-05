@@ -162,7 +162,7 @@ def build_patch_val_loader(cfg: dict, device: str) -> DataLoader:
 
     The patch attack runs 150 PGD-style optimisation steps per batch, making
     it ~7.5× more expensive than FGSM/PGD.  Using 500 images instead of the
-    full val subset keeps patch evaluation within the Colab CU budget while
+    full val subset keeps patch evaluation tractable while
     still producing a statistically meaningful ASR estimate.
     FGSM and PGD always use the full val_subset_size loader.
     """

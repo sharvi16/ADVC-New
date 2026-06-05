@@ -15,7 +15,7 @@ models:
 
 # Compression
 compression:
-  levels: ["fp32", "int8", "int4"]
+  levels: ["int8", "int4"]
   int8:
     backend: "bitsandbytes"
     load_in_8bit: true
@@ -33,10 +33,9 @@ dataset:
   image_size: 224
   mean: [0.485, 0.456, 0.406]
   std: [0.229, 0.224, 0.225]
-  # Update these paths for your environment:
-  # Colab:  /content/drive/MyDrive/research/data/imagenet
-  # Kaggle: /kaggle/input/imagenet-object-localization-challenge
-  # UoM H100 workstation: set absolute path to your imagenet directory below
+  # Paths are relative to the project root. Copy the dataset into data/imagenet/
+  # each session (see CLAUDE.md → Dataset), or set an absolute path on the
+  # lab server below.
   val_dir: "data/imagenet/val"
   train_dir: "data/imagenet/train"
 
@@ -85,8 +84,6 @@ at_kd:
 eval:
   batch_size: 32     # reduced from 64 for 8GB VRAM H100 slice
   num_workers: 0     # 1 CPU core — multiprocessing DataLoader deadlocks with 1 core
-  latency_warmup_runs: 10 
-  latency_measure_runs: 100 
 
 # Paths
 paths:
@@ -94,4 +91,3 @@ paths:
   figures_dir: "results/figures"
   checkpoints_at_dir: "results/checkpoints/at"
   checkpoints_atkd_dir: "results/checkpoints/atkd"
-  drive_backup_dir: "/content/drive/MyDrive/research"

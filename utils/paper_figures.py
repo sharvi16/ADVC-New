@@ -23,7 +23,7 @@ Figures produced (saved to results/figures/):
 Usage:
     python utils/paper_figures.py                         # all figures
     python utils/paper_figures.py --fig 1                 # only figure 1
-    python utils/paper_figures.py --compression fp32      # restrict compression
+    python utils/paper_figures.py --compression int8      # restrict compression
     python utils/paper_figures.py --attack fgsm           # restrict attack
     python utils/paper_figures.py --n-samples 4           # images per panel
     python utils/paper_figures.py --skip-model-figs       # table + fig2/4 only (no GPU needed)
@@ -195,7 +195,7 @@ def _build_attack(name, model, cfg):
 # ── CSV reader ────────────────────────────────────────────────────────────────
 
 def _load_all_results(cfg: dict) -> list[dict]:
-    """Load phase1, phase2_at, phase2_atkd, phase3 CSVs into one list of dicts."""
+    """Load phase1, phase2_at, phase2_atkd CSVs into one list of dicts."""
     results_dir = _ROOT / cfg["paths"]["results_dir"]
     files = {
         "none":  results_dir / "phase1_results.csv",
@@ -577,11 +577,11 @@ def fig4_compression_vs_defense(
         print("[fig4] No results CSVs found — skipping figure 4.")
         return None
 
-    attacks_in_data = sorted({r["attack"] for r in rows if r["attack"] != "combined"})
+    attacks_in_data = sorted({r["attack"] for r in rows})
     if attack_filter:
         attacks_in_data = [a for a in attacks_in_data if a == attack_filter]
 
-    compressions = ["fp32", "int8", "int4"]
+    compressions = ["int8", "int4"]
     defenses     = ["none", "at", "at_kd"]
     def_labels   = [DEFENSE_LABELS.get(d, d) for d in defenses]
 
@@ -682,7 +682,7 @@ def table1_quantitative(
     Returns:
         (csv_path, txt_path)
     """
-    compressions  = compressions  or ["fp32", "int8", "int4"]
+    compressions  = compressions  or ["int8", "int4"]
     attack_names  = attack_names  or ["fgsm", "pgd", "patch"]
     csv_results   = _load_all_results(cfg)
 
@@ -798,7 +798,7 @@ def table1_quantitative(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate all paper figures.")
     parser.add_argument("--model",       default="deit_small", choices=["deit_small"])
-    parser.add_argument("--compression", choices=["fp32", "int8", "int4"], default=None)
+    parser.add_argument("--compression", choices=["int8", "int4"], default=None)
     parser.add_argument("--attack",      choices=["fgsm", "pgd", "patch"], default=None)
     parser.add_argument("--fig",         choices=["1", "2", "3", "4", "table"], default=None,
                         help="Generate only this figure (default: all).")
