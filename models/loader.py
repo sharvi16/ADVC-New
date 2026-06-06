@@ -119,6 +119,16 @@ def _load_int8(timm_name: str, device: str) -> torch.nn.Module:
                 _replace_linear_int8(child)
 
     _replace_linear_int8(model)
+
+    # Explicitly disable gradients on all int8 weight tensors — Int8Params are
+    # integer dtype and cannot hold gradients; leaving requires_grad unset causes
+    # autograd errors during FGSM perturbation generation.
+    for module in model.modules():
+        if isinstance(module, bnb.nn.Linear8bitLt):
+            module.weight.requires_grad_(False)
+            if module.bias is not None:
+                module.bias.requires_grad_(False)
+
     print(f"[loader] INT8: replaced Linear layers with bitsandbytes Int8 on {device}")
     return model
 
@@ -168,6 +178,15 @@ def _load_int4(timm_name: str, config: dict, device: str) -> torch.nn.Module:
                 _replace_linear_int4(child)
 
     _replace_linear_int4(model)
+
+    # Explicitly disable gradients on all int4 weight tensors — Params4bit are
+    # integer dtype and cannot hold gradients.
+    for module in model.modules():
+        if isinstance(module, bnb.nn.Linear4bit):
+            module.weight.requires_grad_(False)
+            if module.bias is not None:
+                module.bias.requires_grad_(False)
+
     print(f"[loader] INT4 (NF4): replaced Linear layers with bitsandbytes Int4 on {device}")
     return model
 
