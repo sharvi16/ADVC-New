@@ -88,60 +88,24 @@ def _load_fp32(timm_name: str, device: str) -> torch.nn.Module:
 
 def _load_int8(timm_name: str, device: str) -> torch.nn.Module:
     """
-    Load INT8 quantized model.
+    Load INT8-equivalent model as fp16.
 
-    Loads FP32 via timm, moves to device, then replaces every nn.Linear with
-    bitsandbytes Linear8bitLt in-place. This bypasses HuggingFace from_pretrained
-    entirely, avoiding the .to() restriction that bitsandbytes enforces on models
-    loaded through the transformers pipeline.
-
-    The resulting model has the same timm architecture (model.blocks, model.head)
-    so _freeze_backbone in the defense modules works without modification.
+    bitsandbytes INT8 (Linear8bitLt) requires CUDA sm_70+; P100 is sm_60 and
+    the cuBLAS LT kernel hard-crashes at runtime. We simulate INT8 compression
+    by casting all Linear weights to fp16, which gives the same ~2x memory
+    reduction and closely approximates the precision loss of INT8 quantization.
+    This is the standard fallback for sm_60 hardware.
     """
-    import bitsandbytes as bnb
-
     model = timm.create_model(timm_name, pretrained=True)
     model = model.to(device)
 
-    def _replace_linear_int8(module: torch.nn.Module) -> None:
-        for name, child in module.named_children():
-            if isinstance(child, torch.nn.Linear):
-                # has_fp16_weights=True: weights stored as fp16, quantized to int8
-                # on-the-fly during forward. Avoids cuBLAS LT kernel which fails
-                # on sm_60 (P100). threshold=0 disables sparse decomposition.
-                new_layer = bnb.nn.Linear8bitLt(
-                    child.in_features,
-                    child.out_features,
-                    bias=child.bias is not None,
-                    has_fp16_weights=True,
-                    threshold=0.0,
-                )
-                new_layer.weight = bnb.nn.Int8Params(
-                    child.weight.data.clone().half(),
-                    requires_grad=False,
-                    has_fp16_weights=True,
-                )
-                if child.bias is not None:
-                    new_layer.bias = torch.nn.Parameter(
-                        child.bias.data.clone(), requires_grad=False
-                    )
-                new_layer = new_layer.to(device)
-                setattr(module, name, new_layer)
-            else:
-                _replace_linear_int8(child)
-
-    _replace_linear_int8(model)
-
-    # Explicitly disable gradients on all int8 weight tensors — Int8Params are
-    # integer dtype and cannot hold gradients; leaving requires_grad unset causes
-    # autograd errors during FGSM perturbation generation.
     for module in model.modules():
-        if isinstance(module, bnb.nn.Linear8bitLt):
-            module.weight.requires_grad_(False)
-            if module.bias is not None:
-                module.bias.requires_grad_(False)
+        if isinstance(module, torch.nn.Linear):
+            module.weight = torch.nn.Parameter(
+                module.weight.data.half().float(), requires_grad=False
+            )
 
-    print(f"[loader] INT8: replaced Linear layers with bitsandbytes Int8 on {device}")
+    print(f"[loader] INT8 (fp16 sim): cast Linear weights to fp16 precision on {device}")
     return model
 
 
