@@ -2,7 +2,7 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 ---
 
-### Running experiments (on Colab — scripts are not meant to run locally)
+### Running experiments (on Kaggle — scripts are not meant to run locally)
 
 ```bash
 # Phase 1 — baseline, no defense
@@ -75,10 +75,10 @@ individually and in combination across three compression levels.
 
 ### Scope decision
 
-- **Model: DeiT-S only.** DeiT-B excluded to stay within 100 CU Colab Pro budget.
+- **Model: DeiT-S only.** DeiT-B excluded to stay within Kaggle GPU quota.
   DeiT-B is noted as future work in the paper.
-- **Compute budget: ~100 CU total.** A100 costs ~3 CU/hr. Every experiment decision
-  must account for this. Estimated usage: ~58 CU experiments + ~40 CU buffer for
+- **Compute budget: Kaggle free tier** — 30 GPU hours/week on T4. Every experiment
+  decision must account for this. Estimated usage: ~20h experiments + ~10h buffer for
   reruns and debugging.
 
 ---
@@ -114,82 +114,76 @@ Measure and save results
 
 ## Hardware & environment
 
-- **Platform:** Google Colab Pro
-- **GPU:** A100 (40GB VRAM) — always select A100 in Runtime > Change runtime type
-- **CU rate:** ~3 CU/hr on A100
-- **Remaining CU:** track this manually — check via Colab Pro dashboard
-- **Session length:** up to 24h, background execution available
-- **Code editor:** VS Code with Claude Code — write here, push to GitHub, run on Colab
-- **Persistence:** Mount Google Drive. Back up every CSV to Drive after each run.
+- **Platform:** Kaggle Notebooks
+- **GPU:** T4 x2 (16GB VRAM each) — select in Settings > Accelerator > GPU T4 x2
+- **Session length:** up to 12h per session (9h interactive + up to 12h scheduled)
+- **Code editor:** VS Code with Claude Code — write here, push to GitHub, run on Kaggle
+- **Dataset:** ImageNette (10-class ImageNet subset) — attach via notebook settings
+- **Persistence:** Results written to `/kaggle/working/` — download or save as dataset version after each run
 
-### Colab session startup (run every session)
+### Kaggle notebook setup (run every session)
 
-> **HF_TOKEN required before any model load.**
-> `facebook/deit-small-patch16-224` requires a HuggingFace token for INT8/INT4
-> loading via `AutoModelForImageClassification`.  Add your token to Colab Secrets
-> (key icon in the left sidebar) with the name `HF_TOKEN`, then expose it via
-> `userdata.get('HF_TOKEN')` as the very first line of Cell 2 — before pip install.
-> Without this, `from_pretrained` will fail with a 401 authentication error.
+> **Prerequisites before running:**
+> 1. In notebook Settings → Add-ons → Secrets: add `HF_TOKEN` with your HuggingFace token
+> 2. In notebook Settings → Add-ons → Datasets: add `rodgzilla/imagenette`
+> 3. Enable internet access in Settings → Internet → On
 
 ```python
-# Cell 1 — verify A100
+# Cell 1 — verify GPU
 import torch
 print(torch.cuda.is_available())
-print(torch.cuda.get_device_name(0))   # should say A100
+print(torch.cuda.get_device_name(0))   # should say Tesla T4
 print(f"{torch.cuda.mem_get_info()[0]/1e9:.1f} GB free")
 
-# Cell 2 — set HF token, then install dependencies
+# Cell 2 — set HF token, install dependencies
 import os
-from google.colab import userdata
-os.environ['HF_TOKEN'] = userdata.get('HF_TOKEN')
+from kaggle_secrets import UserSecretsClient
+os.environ['HF_TOKEN'] = UserSecretsClient().get_secret("HF_TOKEN")
 !pip install -q timm torchattacks bitsandbytes optimum pyyaml
 
-# Cell 3 — mount Drive
-from google.colab import drive
-drive.mount('/content/drive')
+# Cell 3 — extract ImageNette (only needed once per session)
+import os
+if not os.path.exists('/kaggle/working/imagenette2'):
+    !tar -xzf /kaggle/input/datasets/adityakane/imagenette2/imagenette2.tgz -C /kaggle/working/
+    print("Extracted.")
+else:
+    print("Already extracted — skipping.")
 
 # Cell 4 — pull latest code
 !git clone https://github.com/Jmanav/ADVC.git
-%cd ADVC
+%cd /kaggle/working/ADVC
 
-# Cell 5 — restore any previous results from Drive
-import shutil, os
-drive_dir = '/content/drive/MyDrive/research'
-os.makedirs('results', exist_ok=True)
-for f in ['phase1_results.csv', 'phase2_at_results.csv',
-          'phase2_atkd_results.csv', 'phase3_results.csv']:
-    src = f'{drive_dir}/{f}'
-    if os.path.exists(src):
-        shutil.copy(src, f'results/{f}')
-        print(f'Restored {f}')
-
-# Cell 6 — copy dataset to local NVMe (REQUIRED — do not skip)
-# Reading images directly from Drive is ~100x slower than local disk.
-# Scripts use paths relative to the project root, so copying here makes
-# data/imagenet/train and data/imagenet/val resolve to local NVMe automatically.
-import shutil, os
-drive_data = '/content/drive/MyDrive/research/data/imagenet'
-local_data = '/content/ADVC/data/imagenet'
-if not os.path.exists(local_data):
-    print("Copying dataset from Drive to local NVMe — this takes ~2 min...")
-    shutil.copytree(drive_data, local_data)
-    print("Done. Data is now on local disk.")
-else:
-    print("Dataset already on local disk — skipping copy.")
+# Cell 5 — restore any previous results (from a saved Kaggle dataset output)
+# If you saved a previous run as a Kaggle dataset named "advc-results", attach it
+# in notebook settings and uncomment the block below.
+# import shutil, os
+# results_input = '/kaggle/input/advc-results'
+# os.makedirs('results', exist_ok=True)
+# for f in ['phase1_results.csv', 'phase2_at_results.csv',
+#           'phase2_atkd_results.csv', 'phase3_results.csv']:
+#     src = f'{results_input}/{f}'
+#     if os.path.exists(src):
+#         shutil.copy(src, f'results/{f}')
+#         print(f'Restored {f}')
 ```
 
-### After every run — back up immediately
+> **Dataset path:** ImageNette is mounted at `/kaggle/input/imagenette/imagenette2-320/`.
+> This is already set in `configs/base.yaml` — no path changes needed.
+> The dataset is read directly from the mount point (no copying needed; Kaggle SSD is fast).
+
+### After every run — save results
+
+Results land in `/kaggle/working/ADVC/results/`. To persist them across sessions:
 
 ```python
-import shutil, os
-drive_dir = '/content/drive/MyDrive/research'
-os.makedirs(drive_dir, exist_ok=True)
-for f in ['phase1_results.csv', 'phase2_at_results.csv',
-          'phase2_atkd_results.csv', 'phase3_results.csv']:
-    src = f'results/{f}'
-    if os.path.exists(src):
-        shutil.copy(src, f'{drive_dir}/{f}')
-        print(f'Backed up {f}')
+# Option A — download directly from the notebook output panel (right sidebar)
+# Option B — save as a new Kaggle dataset version (reusable across sessions)
+import subprocess
+subprocess.run([
+    "kaggle", "datasets", "version",
+    "-p", "/kaggle/working/ADVC/results",
+    "-m", "phase results update",
+], check=True)
 ```
 
 ---
@@ -202,7 +196,7 @@ for f in ['phase1_results.csv', 'phase2_at_results.csv',
 
 - Load via `timm` for all cases
 - For AT+KD: load FP32 teacher and compressed student simultaneously
-  (~85MB + ~25MB = ~110MB total — trivially fits on A100 40GB)
+  (~85MB + ~25MB = ~110MB total — trivially fits on T4 16GB)
 - Always `model.eval()` before inference, `model.train()` before fine-tuning
 - Teacher in AT+KD must always stay frozen: `teacher.eval()` + `torch.no_grad()`
 
@@ -238,9 +232,9 @@ Implemented in `attacks/combined.py`.
 **Fixed across all experiments:**
 - Epsilon: 8/255 L-inf for FGSM and PGD
 - Patch: 32×32 pixels on 224×224 image
-- Validation subset: 5000 images, ImageNet-1k val, seed=42
-- Training subset: 10000 images, ImageNet-1k train, seed=42
-- Batch size: 64 (A100 can handle this comfortably for DeiT-S)
+- Validation set: all ~3925 ImageNette val images, seed=42
+- Training set: all ~9469 ImageNette train images, seed=42
+- Batch size: 32 eval / 16 training (T4 16GB)
 
 ---
 
@@ -415,7 +409,7 @@ ADVC/
 - **Type hints** on all function signatures
 - **Docstrings** on every function
 - **Append to CSV immediately** after each row — never accumulate in memory
-- **A100 batch size** — use 64 for eval, 32 for AT/AT+KD training
+- **T4 batch size** — use 32 for eval, 16 for AT/AT+KD training
 
 ---
 
@@ -449,28 +443,28 @@ for compression in COMPRESSIONS:
 
 - Do not apply defense before compression — always compress first
 - Do not use input preprocessing or randomized smoothing
-- Do not load full ImageNet — 5000 val / 10000 train subsets only
+- Do not load full ImageNet — use ImageNette (10-class subset) only
 - Do not run more than 7 AT/AT+KD epochs — CU budget
 - Do not apply gradients to the teacher in AT+KD — frozen always
 - Do not use `plt.show()` in scripts — save to `results/figures/`
 - Do not commit weights, checkpoints, or CSVs to git
 - Do not hardcode any path or hyperparameter
-- Do not switch to V100 or T4 — always use A100 on Colab Pro
+- Do not switch to CPU — always enable T4 x2 GPU in Kaggle notebook settings
 
 ---
 
-## CU budget tracker
+## GPU hours tracker
 
-Update this manually after each experiment run:
+Update this manually after each experiment run. Kaggle free tier: 30 GPU h/week on T4.
 
-| Phase | Estimated CU | Actual CU | Status |
-|-------|-------------|-----------|--------|
-| Phase 1 | ~4 CU | — | pending |
-| Phase 2a (AT) | ~18 CU | — | pending |
-| Phase 2b (AT+KD) | ~22 CU | — | pending |
-| Phase 3 | ~9 CU | — | pending |
-| Buffer | ~47 CU | — | reserved |
-| **Total** | **~100 CU** | | |
+| Phase | Estimated GPU hrs | Actual GPU hrs | Status |
+|-------|-------------------|----------------|--------|
+| Phase 1 | ~2h | — | pending |
+| Phase 2a (AT) | ~8h | — | pending |
+| Phase 2b (AT+KD) | ~10h | — | pending |
+| Phase 3 | ~4h | — | pending |
+| Buffer | ~6h | — | reserved |
+| **Total** | **~30h** | | |
 
 ---
 
@@ -496,4 +490,4 @@ Update this manually after each experiment run:
 - clean_acc drops more than 5% FP32 → INT4 → quantization setup wrong
 - AT+KD performs worse than AT → teacher not frozen or temperature wrong
 - ASR = 0.0 or 1.0 for any cell → implementation bug, do not include in paper
-- A100 not available → do not run on T4, wait for A100 to preserve CU budget
+- T4 GPU not available → do not run on CPU; wait for Kaggle GPU quota to reset
