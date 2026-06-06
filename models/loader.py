@@ -10,14 +10,22 @@ Usage:
     model = load_model(model_name="deit_small", compression="int8", config=cfg)
 """
 
+import os
 import torch
 import timm
 import yaml
+from pathlib import Path
 from typing import Literal
 
 
 CompressionLevel = Literal["fp32", "int8", "int4"]
 ModelName = Literal["deit_small"]
+
+
+def resolve_data_path(root: Path, rel_or_abs: str) -> Path:
+    """Return Path as-is if absolute, otherwise join with project root."""
+    p = Path(rel_or_abs)
+    return p if p.is_absolute() else root / p
 
 
 def load_config(config_path: str = "configs/base.yaml") -> dict:

@@ -29,7 +29,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
 import torchattacks
-from models.loader import load_config  # noqa: F401 — re-exported for convenience
+from models.loader import load_config, resolve_data_path  # noqa: F401 — re-exported for convenience
 
 
 class _LogitsWrapper(nn.Module):
@@ -520,7 +520,7 @@ if __name__ == "__main__":
     ])
 
     train_dataset = ImageFolder(
-        root=str(_ROOT / ds_cfg["train_dir"]),
+        root=str(resolve_data_path(_ROOT, ds_cfg["train_dir"])),
         transform=transform,
     )
     # Use a tiny 64-sample subset so the smoke test finishes quickly.

@@ -35,7 +35,7 @@ from torchvision.datasets import ImageFolder
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
-from models.loader import load_config, load_model
+from models.loader import load_config, load_model, resolve_data_path
 import attacks.fgsm as fgsm_mod
 import attacks.pgd as pgd_mod
 import attacks.patch as patch_mod
@@ -140,7 +140,7 @@ def build_val_loader(cfg: dict, device: str) -> DataLoader:
         T.Normalize(mean=ds_cfg["mean"], std=ds_cfg["std"]),
     ])
 
-    full_dataset = ImageFolder(root=str(_ROOT / ds_cfg["val_dir"]), transform=transform)
+    full_dataset = ImageFolder(root=str(resolve_data_path(_ROOT, ds_cfg["val_dir"])), transform=transform)
     full_dataset = _remap_subset_labels(full_dataset)
 
     rng = torch.Generator()
@@ -178,7 +178,7 @@ def build_patch_val_loader(cfg: dict, device: str) -> DataLoader:
         T.Normalize(mean=ds_cfg["mean"], std=ds_cfg["std"]),
     ])
 
-    full_dataset = ImageFolder(root=str(_ROOT / ds_cfg["val_dir"]), transform=transform)
+    full_dataset = ImageFolder(root=str(resolve_data_path(_ROOT, ds_cfg["val_dir"])), transform=transform)
     full_dataset = _remap_subset_labels(full_dataset)
 
     # Draw from the same shuffled order as build_val_loader so the 500 images
@@ -216,7 +216,7 @@ def build_train_loader(cfg: dict, device: str) -> DataLoader:
         T.Normalize(mean=ds_cfg["mean"], std=ds_cfg["std"]),
     ])
 
-    full_dataset = ImageFolder(root=str(_ROOT / ds_cfg["train_dir"]), transform=transform)
+    full_dataset = ImageFolder(root=str(resolve_data_path(_ROOT, ds_cfg["train_dir"])), transform=transform)
     full_dataset = _remap_subset_labels(full_dataset)
 
     rng = torch.Generator()

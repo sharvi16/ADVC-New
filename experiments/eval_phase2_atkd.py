@@ -39,7 +39,7 @@ from torchvision.datasets import ImageFolder
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
-from models.loader import load_config, load_model
+from models.loader import load_config, load_model, resolve_data_path
 import attacks.fgsm as fgsm_mod
 import attacks.pgd as pgd_mod
 import attacks.patch as patch_mod
@@ -144,7 +144,7 @@ def build_val_loader(cfg: dict, device: str) -> DataLoader:
         T.Normalize(mean=ds_cfg["mean"], std=ds_cfg["std"]),
     ])
 
-    val_path = _ROOT / ds_cfg["val_dir"]
+    val_path = resolve_data_path(_ROOT, ds_cfg["val_dir"])
     print(f"[phase2-ATKD] val_dir   : {val_path}")
     full_dataset = ImageFolder(root=str(val_path), transform=transform)
     full_dataset = _remap_subset_labels(full_dataset)
@@ -184,7 +184,7 @@ def build_patch_val_loader(cfg: dict, device: str) -> DataLoader:
         T.Normalize(mean=ds_cfg["mean"], std=ds_cfg["std"]),
     ])
 
-    val_path = _ROOT / ds_cfg["val_dir"]
+    val_path = resolve_data_path(_ROOT, ds_cfg["val_dir"])
     full_dataset = ImageFolder(root=str(val_path), transform=transform)
     full_dataset = _remap_subset_labels(full_dataset)
 
@@ -223,7 +223,7 @@ def build_train_loader(cfg: dict, device: str) -> DataLoader:
         T.Normalize(mean=ds_cfg["mean"], std=ds_cfg["std"]),
     ])
 
-    train_path = _ROOT / ds_cfg["train_dir"]
+    train_path = resolve_data_path(_ROOT, ds_cfg["train_dir"])
     print(f"[phase2-ATKD] train_dir : {train_path}")
     full_dataset = ImageFolder(root=str(train_path), transform=transform)
     full_dataset = _remap_subset_labels(full_dataset)

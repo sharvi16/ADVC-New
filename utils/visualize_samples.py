@@ -38,7 +38,7 @@ from torchvision.datasets import ImageFolder
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
-from models.loader import load_config, load_model
+from models.loader import load_config, load_model, resolve_data_path
 import attacks.fgsm as fgsm_mod
 import attacks.pgd as pgd_mod
 import attacks.patch as patch_mod
@@ -99,7 +99,7 @@ def _build_loader(cfg: dict, n: int, device: str) -> DataLoader:
         T.ToTensor(),
         T.Normalize(mean=ds_cfg["mean"], std=ds_cfg["std"]),
     ])
-    ds = ImageFolder(root=str(_ROOT / ds_cfg["val_dir"]), transform=transform)
+    ds = ImageFolder(root=str(resolve_data_path(_ROOT, ds_cfg["val_dir"])), transform=transform)
     ds = _remap_labels(ds)
     rng = torch.Generator()
     rng.manual_seed(cfg["seed"])
