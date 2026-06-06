@@ -15,7 +15,7 @@ models:
 
 # Compression
 compression:
-  levels: ["int8", "int4"]
+  levels: ["fp32", "int8", "int4"]
   int8:
     backend: "bitsandbytes"
     load_in_8bit: true
