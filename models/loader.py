@@ -100,7 +100,7 @@ def _load_int8(timm_name: str, config: dict, device: str) -> torch.nn.Module:
             model = AutoModelForImageClassification.from_pretrained(
                 hf_name,
                 quantization_config=bnb_config,
-                device_map="auto",
+                device_map={"": 0} if device == "cuda" else {"": "cpu"},
                 token=os.environ.get("HF_TOKEN"),
             )
             return model
@@ -148,7 +148,7 @@ def _load_int4(timm_name: str, config: dict, device: str) -> torch.nn.Module:
     model = AutoModelForImageClassification.from_pretrained(
         hf_name,
         quantization_config=bnb_config,
-        device_map="auto",
+        device_map={"": 0} if device == "cuda" else {"": "cpu"},
         token=os.environ.get("HF_TOKEN"),
     )
     return model
