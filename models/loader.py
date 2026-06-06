@@ -106,16 +106,20 @@ def _load_int8(timm_name: str, device: str) -> torch.nn.Module:
     def _replace_linear_int8(module: torch.nn.Module) -> None:
         for name, child in module.named_children():
             if isinstance(child, torch.nn.Linear):
+                # has_fp16_weights=True: weights stored as fp16, quantized to int8
+                # on-the-fly during forward. Avoids cuBLAS LT kernel which fails
+                # on sm_60 (P100). threshold=0 disables sparse decomposition.
                 new_layer = bnb.nn.Linear8bitLt(
                     child.in_features,
                     child.out_features,
                     bias=child.bias is not None,
-                    has_fp16_weights=False,
+                    has_fp16_weights=True,
+                    threshold=0.0,
                 )
                 new_layer.weight = bnb.nn.Int8Params(
-                    child.weight.data.clone(),
+                    child.weight.data.clone().half(),
                     requires_grad=False,
-                    has_fp16_weights=False,
+                    has_fp16_weights=True,
                 )
                 if child.bias is not None:
                     new_layer.bias = torch.nn.Parameter(

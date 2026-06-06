@@ -46,6 +46,7 @@ def build_attack(
         steps=pgd_cfg["steps"],
     )
     attack.set_normalization_used(mean=mean, std=std)
+    attack.set_training_mode(model_training=False, batchnorm_training=False)
     return attack
 
 
