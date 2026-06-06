@@ -58,7 +58,7 @@ def load_model(
     if compression == "fp32":
         model = _load_fp32(timm_name, device)
     elif compression == "int8":
-        model = _load_int8(timm_name, config, device)
+        model = _load_int8(timm_name, device)
     elif compression == "int4":
         model = _load_int4(timm_name, config, device)
     else:
@@ -78,56 +78,59 @@ def _load_fp32(timm_name: str, device: str) -> torch.nn.Module:
     return model
 
 
-def _load_int8(timm_name: str, config: dict, device: str) -> torch.nn.Module:
+def _load_int8(timm_name: str, device: str) -> torch.nn.Module:
     """
     Load INT8 quantized model.
-    Uses bitsandbytes if available, falls back to torch static quantization.
+
+    Loads FP32 via timm, moves to device, then replaces every nn.Linear with
+    bitsandbytes Linear8bitLt in-place. This bypasses HuggingFace from_pretrained
+    entirely, avoiding the .to() restriction that bitsandbytes enforces on models
+    loaded through the transformers pipeline.
+
+    The resulting model has the same timm architecture (model.blocks, model.head)
+    so _freeze_backbone in the defense modules works without modification.
     """
-    backend = config["compression"]["int8"]["backend"]
+    import bitsandbytes as bnb
 
-    if backend == "bitsandbytes":
-        try:
-            from transformers import AutoModelForImageClassification, BitsAndBytesConfig
-            import bitsandbytes  # noqa: F401
+    model = timm.create_model(timm_name, pretrained=True)
+    model = model.to(device)
 
-            hf_name = _get_hf_name(timm_name, config)
+    def _replace_linear_int8(module: torch.nn.Module) -> None:
+        for name, child in module.named_children():
+            if isinstance(child, torch.nn.Linear):
+                new_layer = bnb.nn.Linear8bitLt(
+                    child.in_features,
+                    child.out_features,
+                    bias=child.bias is not None,
+                    has_fp16_weights=False,
+                )
+                new_layer.weight = bnb.nn.Int8Params(
+                    child.weight.data.clone(),
+                    requires_grad=False,
+                    has_fp16_weights=False,
+                )
+                if child.bias is not None:
+                    new_layer.bias = torch.nn.Parameter(
+                        child.bias.data.clone(), requires_grad=False
+                    )
+                new_layer = new_layer.to(device)
+                setattr(module, name, new_layer)
+            else:
+                _replace_linear_int8(child)
 
-            # load_in_8bit as a direct kwarg was removed in newer transformers;
-            # it must be passed via BitsAndBytesConfig instead.
-            bnb_config = BitsAndBytesConfig(load_in_8bit=True)
-
-            import os
-            model = AutoModelForImageClassification.from_pretrained(
-                hf_name,
-                quantization_config=bnb_config,
-                device_map={"": 0} if device == "cuda" else {"": "cpu"},
-                token=os.environ.get("HF_TOKEN"),
-            )
-            return model
-
-        except (ImportError, Exception) as exc:
-            print(
-                f"[loader] bitsandbytes INT8 failed ({exc}), "
-                "falling back to torch static quantization."
-            )
-            backend = "torch"
-
-    if backend == "torch":
-        model = timm.create_model(timm_name, pretrained=True)
-        model = model.to("cpu")
-        model.qconfig = torch.quantization.get_default_qconfig("fbgemm")
-        torch.quantization.prepare(model, inplace=True)
-        torch.quantization.convert(model, inplace=True)
-        if device == "cuda":
-            print("[loader] Note: torch static quantization runs on CPU only.")
-        return model
-
-    raise ValueError(f"Unknown INT8 backend: {backend!r}")
+    _replace_linear_int8(model)
+    print(f"[loader] INT8: replaced Linear layers with bitsandbytes Int8 on {device}")
+    return model
 
 
 def _load_int4(timm_name: str, config: dict, device: str) -> torch.nn.Module:
-    """Load INT4 (NF4) quantized model via bitsandbytes."""
-    from transformers import AutoModelForImageClassification, BitsAndBytesConfig
+    """
+    Load INT4 (NF4) quantized model.
+
+    Same strategy as INT8: load FP32 via timm then replace nn.Linear layers
+    with bitsandbytes Linear4bit (NF4) in-place.
+    """
+    import bitsandbytes as bnb
 
     int4_cfg = config["compression"]["int4"]
     compute_dtype = (
@@ -135,22 +138,37 @@ def _load_int4(timm_name: str, config: dict, device: str) -> torch.nn.Module:
         if int4_cfg["bnb_4bit_compute_dtype"] == "float16"
         else torch.bfloat16
     )
+    quant_type = int4_cfg["bnb_4bit_quant_type"]  # "nf4"
 
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_quant_type=int4_cfg["bnb_4bit_quant_type"],
-        bnb_4bit_compute_dtype=compute_dtype,
-    )
+    model = timm.create_model(timm_name, pretrained=True)
+    model = model.to(device)
 
-    hf_name = _get_hf_name(timm_name, config)
+    def _replace_linear_int4(module: torch.nn.Module) -> None:
+        for name, child in module.named_children():
+            if isinstance(child, torch.nn.Linear):
+                new_layer = bnb.nn.Linear4bit(
+                    child.in_features,
+                    child.out_features,
+                    bias=child.bias is not None,
+                    compute_dtype=compute_dtype,
+                    quant_type=quant_type,
+                )
+                new_layer.weight = bnb.nn.Params4bit(
+                    child.weight.data.clone(),
+                    requires_grad=False,
+                    quant_type=quant_type,
+                )
+                if child.bias is not None:
+                    new_layer.bias = torch.nn.Parameter(
+                        child.bias.data.clone(), requires_grad=False
+                    )
+                new_layer = new_layer.to(device)
+                setattr(module, name, new_layer)
+            else:
+                _replace_linear_int4(child)
 
-    import os
-    model = AutoModelForImageClassification.from_pretrained(
-        hf_name,
-        quantization_config=bnb_config,
-        device_map={"": 0} if device == "cuda" else {"": "cpu"},
-        token=os.environ.get("HF_TOKEN"),
-    )
+    _replace_linear_int4(model)
+    print(f"[loader] INT4 (NF4): replaced Linear layers with bitsandbytes Int4 on {device}")
     return model
 
 
@@ -201,9 +219,7 @@ if __name__ == "__main__":
             model = load_model("deit_small", level, cfg)
             print_model_info(model, "deit_small", level)
 
-            dummy = torch.randn(1, 3, 224, 224)
-            if level == "fp32":
-                dummy = dummy.cuda()
+            dummy = torch.randn(1, 3, 224, 224).to(next(model.parameters()).device)
             with torch.no_grad():
                 out = model(dummy)
             print(f"         Output : {out.logits.shape if hasattr(out, 'logits') else out.shape}\n")
