@@ -42,7 +42,7 @@ def build_attack(
     std  = config["dataset"]["std"]
     attack = torchattacks.FGSM(model, eps=eps)
     attack.set_normalization_used(mean=mean, std=std)
-    attack.set_training_mode(model_training=False, batchnorm_training=False)
+    attack.set_model_training_mode(model_training=False, batchnorm_training=False)
     return attack
 
 
