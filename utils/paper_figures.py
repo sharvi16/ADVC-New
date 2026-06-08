@@ -339,11 +339,11 @@ def fig2_asr_vs_epsilon(
     asr_fgsm, asr_pgd = [], []
 
     for eps in epsilons:
-        # FGSM
+        # FGSM — attack needs gradients; only suppress them for the prediction
         atk = torchattacks.FGSM(model, eps=eps)
         atk.set_normalization_used(mean=mean, std=std)
+        adv = atk(imgs, lbls)
         with torch.no_grad():
-            adv = atk(imgs, lbls)
             preds = model(adv).argmax(dim=1)
         asr_fgsm.append((preds != lbls).float().mean().item())
 
@@ -354,8 +354,8 @@ def fig2_asr_vs_epsilon(
             steps=cfg["pgd"]["steps"],
         )
         atk2.set_normalization_used(mean=mean, std=std)
+        adv2 = atk2(imgs, lbls)
         with torch.no_grad():
-            adv2 = atk2(imgs, lbls)
             preds2 = model(adv2).argmax(dim=1)
         asr_pgd.append((preds2 != lbls).float().mean().item())
 
