@@ -704,7 +704,10 @@ def table1_quantitative(
         return float("nan")
 
     mean, std = cfg["dataset"]["mean"], cfg["dataset"]["std"]
-    loader = _build_loader(cfg, n_eval, device)
+    # Cap at 32 — bitsandbytes INT8 matmul allocates large int32 buffers per
+    # batch; 200 images × PGD steps OOMs on T4 16GB.
+    n_eval_capped = min(n_eval, 32)
+    loader = _build_loader(cfg, n_eval_capped, device)
     images_cpu, labels_cpu = next(iter(loader))
 
     table_rows = []
@@ -718,6 +721,7 @@ def table1_quantitative(
             print(f"[table1]   attack={attack_name} …")
             attack = _build_attack(attack_name, model, cfg)
             adv    = attack(images_cpu.to(mdev), labels_cpu.to(mdev)).cpu().detach()
+            del attack
 
             clean_px = _unnorm_batch(images_cpu, mean, std)
             adv_px   = _unnorm_batch(adv, mean, std)
