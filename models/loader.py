@@ -91,9 +91,12 @@ def _load_int8(timm_name: str, device: str) -> torch.nn.Module:
     Load INT8 quantized model via bitsandbytes Linear8bitLt.
 
     Requires CUDA sm_70+ (T4 is sm_75 — supported). Linear8bitLt stores weights
-    as true 8-bit integers and uses cuBLAS-LT for matrix multiply; weights are
-    quantized on the first .cuda() call. The replacement must happen on CPU before
-    moving to device, otherwise bitsandbytes cannot intercept the weight layout.
+    as true 8-bit integers and uses cuBLAS-LT for matrix multiply.
+
+    The weight must be assigned as bnb.nn.Int8Params (not a plain nn.Parameter)
+    so bitsandbytes can populate the .CB quantized buffer on the first forward
+    pass. We build the layer on CPU, move to CUDA, then run a dummy forward pass
+    to trigger quantization before any downstream code touches the weights.
     """
     import bitsandbytes as bnb
 
@@ -108,8 +111,11 @@ def _load_int8(timm_name: str, device: str) -> torch.nn.Module:
                     bias=child.bias is not None,
                     has_fp16_weights=False,
                 )
-                new_layer.weight = torch.nn.Parameter(
-                    child.weight.data.clone(), requires_grad=False
+                # Must use Int8Params so bitsandbytes populates .CB on forward.
+                new_layer.weight = bnb.nn.Int8Params(
+                    child.weight.data.clone(),
+                    requires_grad=False,
+                    has_fp16_weights=False,
                 )
                 if child.bias is not None:
                     new_layer.bias = torch.nn.Parameter(
@@ -122,9 +128,7 @@ def _load_int8(timm_name: str, device: str) -> torch.nn.Module:
     _replace_linear_int8(model)
     model = model.to(device)
 
-    # Linear8bitLt weights are not actually quantized (CB buffer not populated)
-    # until the first forward pass. Run a dummy pass now so .CB exists before
-    # any downstream code (eval loop, FGSM, freeze check) touches the weights.
+    # Trigger .CB buffer population for all Linear8bitLt layers.
     with torch.no_grad():
         dummy = torch.zeros(1, 3, 224, 224, device=device)
         model(dummy)
