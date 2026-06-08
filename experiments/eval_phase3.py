@@ -152,16 +152,28 @@ def _load_checkpoint(
     ckpt_path_full: Path,
     ckpt_path_state: Path,
     label: str,
+    device: str = "cuda",
 ) -> nn.Module:
-    """Load a checkpoint from disk — full model or state dict, whichever exists."""
+    """Load a checkpoint from disk — full model or state dict, whichever exists.
+
+    For bitsandbytes quantized layers (Linear8bitLt), load_state_dict requires
+    the model to already be on CUDA so the quantized buffers are initialised.
+    We always move the model to device before loading the state dict.
+    """
     if ckpt_path_full.is_file():
         print(f"[phase3] {label}: loading full model checkpoint from {ckpt_path_full} …")
-        loaded = torch.load(str(ckpt_path_full), map_location="cpu")
+        loaded = torch.load(str(ckpt_path_full), map_location=device)
         loaded.eval()
         return loaded
     if ckpt_path_state.is_file():
         print(f"[phase3] {label}: loading state dict from {ckpt_path_state} …")
-        state_dict = torch.load(str(ckpt_path_state), map_location="cpu")
+        # bitsandbytes Linear8bitLt requires model on CUDA before load_state_dict
+        # so the .CB quantized buffer is populated on the first forward pass.
+        model = model.to(device)
+        with torch.no_grad():
+            dummy = torch.zeros(1, 3, 224, 224, device=device)
+            model(dummy)
+        state_dict = torch.load(str(ckpt_path_state), map_location=device)
         model.load_state_dict(state_dict)
         model.eval()
         return model
@@ -198,13 +210,15 @@ def load_defended_model(
         ckpt_dir = _ROOT / cfg["paths"]["checkpoints_at_dir"]
         full_path  = ckpt_dir / f"at_{compression}_epoch{epochs:02d}_full_model.pt"
         state_path = ckpt_dir / f"at_{compression}_epoch{epochs:02d}.pt"
-        return _load_checkpoint(model, full_path, state_path, f"{compression}+AT")
+        device = infer_model_device(model) or "cuda"
+        return _load_checkpoint(model, full_path, state_path, f"{compression}+AT", device)
 
     if defense == "at_kd":
         ckpt_dir = _ROOT / cfg["paths"]["checkpoints_atkd_dir"]
         full_path  = ckpt_dir / f"atkd_{compression}_epoch{epochs:02d}_full_model.pt"
         state_path = ckpt_dir / f"atkd_{compression}_epoch{epochs:02d}.pt"
-        return _load_checkpoint(model, full_path, state_path, f"{compression}+AT+KD")
+        device = infer_model_device(model) or "cuda"
+        return _load_checkpoint(model, full_path, state_path, f"{compression}+AT+KD", device)
 
     raise ValueError(f"Unknown defense: {defense!r}")
 
