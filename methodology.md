@@ -1,336 +1,293 @@
-# Methodology
-
-## 1. Overview
-
-This work presents an empirical study of adversarial robustness under post-training quantization (PTQ) for Vision Transformers (ViTs) deployed at the edge. The central research question is whether adversarial defenses remain effective after model compression, and whether this effectiveness degrades as compression becomes more aggressive.
-
-The experimental design follows a three-phase pipeline:
-
-1. **Phase 1** — Baseline evaluation of an undefended model across two compression levels (INT8, INT4) and three attack types.
-2. **Phase 2a** — Adversarial Training (AT) applied to each compressed model, followed by re-evaluation.
-3. **Phase 2b** — Adversarial Training with Knowledge Distillation (AT+KD) applied to each compressed model, followed by re-evaluation.
-
-The compression pipeline strictly enforces the order: **compress first, then defend**. This reflects the realistic edge deployment scenario in which a model is quantized for resource constraints before any robustness fine-tuning is applied.
-
----
-
-## 2. Dataset
-
-### 2.1 Dataset Description
-
-All experiments use **Imagenette2-320**, a 10-class subset of ImageNet-1K introduced by fast.ai, containing the following classes: tench, English springer, cassette player, chain saw, church, French horn, garbage truck, gas pump, golf ball, and parachute. Images are sourced at 320-pixel resolution and resized during preprocessing.
-
-| Split | Images Used | Selection Method |
-|-------|-------------|-----------------|
-| Validation | 5,000 | Deterministic `torch.randperm` with seed 42 |
-| Training (AT/AT+KD) | 10,000 | Deterministic `torch.randperm` with seed 42 |
-| Patch evaluation | 500 | Strict prefix of the 5,000-image validation subset |
-
-The patch evaluation subset is intentionally smaller (500 images) because the adversarial patch attack requires 150 optimisation steps per batch, making it approximately 7.5× more expensive than FGSM or PGD. Using a 500-image prefix of the full validation subset preserves comparability of clean accuracy denominators across attacks.
-
-### 2.2 Label Remapping
-
-Since Imagenette2-320 contains only 10 classes, its integer class indices (0–9) do not correspond to ImageNet-1K indices (0–999). All experiment scripts apply a deterministic remapping from ImageFolder synset identifiers to their corresponding ImageNet-1K indices before computing accuracy, ensuring that pretrained model logits are evaluated against the correct class positions.
-
-### 2.3 Preprocessing
-
-The following preprocessing pipeline is applied consistently across all splits and phases:
-
-```
-Resize(256) → CenterCrop(224) → ToTensor() → Normalize(mean, std)
-```
-
-For training (AT/AT+KD fine-tuning), data augmentation is applied:
-
-```
-RandomResizedCrop(224) → RandomHorizontalFlip() → ToTensor() → Normalize(mean, std)
-```
-
-ImageNet normalisation statistics are used throughout:
-
-- **Mean**: [0.485, 0.456, 0.406]
-- **Std**: [0.229, 0.224, 0.225]
-
-### 2.4 Rationale
-
-Imagenette2-320 is selected as a computationally tractable proxy for full ImageNet-1K evaluation. Its 10 classes are visually distinct, reducing label ambiguity, while the use of an ImageNet-pretrained model means that the 10-class distribution is a strict subset of the model's training distribution — clean accuracy figures are directly comparable to full ImageNet benchmarks.
-
----
-
-## 3. Model Architecture
-
-### 3.1 Base Architecture
-
-All experiments use **DeiT-Small** (Data-efficient Image Transformer, Small variant), a Vision Transformer architecture proposed by Touvron et al. (2021). DeiT-Small processes images as sequences of non-overlapping 16×16 patches with a class token prepended for classification.
-
-| Property | Value |
-|----------|-------|
-| Architecture | Vision Transformer (ViT) |
-| Variant | DeiT-Small |
-| timm identifier | `deit_small_patch16_224` |
-| HuggingFace identifier | `facebook/deit-small-patch16-224` |
-| Parameters | ~22M |
-| Input resolution | 224 × 224 |
-| Patch size | 16 × 16 |
-| Transformer blocks | 12 |
-| Number of classes | 1,000 |
-
-### 3.2 Pre-training
-
-The model is loaded with ImageNet-1K pretrained weights via `timm.create_model(..., pretrained=True)` for FP32, and via `transformers.AutoModelForImageClassification.from_pretrained` for INT8 and INT4 quantised variants. No fine-tuning is performed on the undefended baseline — Phase 1 evaluates the pretrained weights directly.
-
-### 3.3 Compression Levels
-
-Two compression configurations are evaluated. FP32 is not evaluated as a compression level; it serves only as the pre-quantization base model and as the frozen teacher in AT+KD (Section 4).
-
-| Level | Method | Backend | Configuration |
-|-------|--------|---------|---------------|
-| INT8 | Post-training quantization | bitsandbytes ≥0.41.0 | `load_in_8bit=True` |
-| INT4 | Post-training quantization (NF4) | bitsandbytes ≥0.41.0 | `load_in_4bit=True`, `bnb_4bit_quant_type="nf4"`, `bnb_4bit_compute_dtype=float16` |
-
-INT4 uses NormalFloat-4 (NF4) quantization, which maps weights to the 16 values of a normal distribution. NF4 is information-theoretically optimal for normally distributed weights and is used as the compression scheme in QLoRA (Dettmers et al., 2023). Compute operations are performed in float16 to maintain numerical stability.
-
-### 3.4 Justification
-
-DeiT-Small is selected as the primary model for the following reasons:
-
-- **Parameter efficiency**: At ~22M parameters, it fits within the 8.6 GB VRAM constraint of the H100 slice used for experiments.
-- **ViT relevance**: Vision Transformers are increasingly deployed at the edge; studying their robustness under quantization is of direct practical relevance.
-- **Compression sensitivity**: The attention mechanism and layer normalisation in ViTs are known to be sensitive to quantization, making INT4 degradation a measurable and scientifically interesting phenomenon.
-
----
-
-## 4. Training Configuration
-
-### 4.1 Adversarial Fine-tuning (AT and AT+KD)
-
-Both defenses fine-tune the already-compressed model. Training configuration is shared across AT and AT+KD except where noted.
-
-| Hyperparameter | Value |
-|---------------|-------|
-| Optimizer | AdamW |
-| Weight decay | 0.01 |
-| Epochs | 7 |
-| Batch size | 16 |
-| Warmup epochs | 1 (epoch 1 uses lr/10) |
-| AT epsilon | 8/255 ≈ 0.03137 |
-| Checkpoint frequency | Every epoch |
-| Loss function | Cross-entropy (AT); weighted CE + KL divergence (AT+KD) |
-
-### 4.2 Per-Compression Learning Rates
-
-Per-compression learning rates are used because quantized weights are significantly more fragile than full-precision weights under gradient updates. INT4 NF4 weights cannot absorb large gradient steps without catastrophic weight corruption.
-
-| Compression | Learning Rate |
-|-------------|--------------|
-| INT8 | 5 × 10⁻⁶ |
-| INT4 | 1 × 10⁻⁶ |
-
-### 4.3 Layer Freezing
-
-To reduce the risk of catastrophic forgetting under adversarial fine-tuning, the backbone is partially frozen. Specifically:
-
-- All parameters are frozen initially.
-- The **last 4 transformer blocks** and the **classifier head** are unfrozen and updated during training.
-- Quantized (integer) parameters from bitsandbytes are excluded from gradient computation regardless of freezing status.
-
-This yields approximately 7.48M trainable parameters out of 22.05M total (33.9%) in the unquantized architecture; for INT8/INT4 students the trainable count is lower, since quantized integer weights in the unfrozen blocks are excluded from gradient updates.
-
-### 4.4 Hardware
-
-All experiments are conducted on a **NVIDIA H100 GPU** (8.6 GB VRAM slice) with 1 Intel Xeon Platinum 8480+ CPU core and 28 GB RAM. DataLoader `num_workers=0` is used throughout to avoid multiprocessing deadlocks with a single CPU core.
-
----
-
-## 5. Adversarial Attack Methods
-
-All attacks operate under the **L∞ threat model** with perturbation bound ε = 8/255. Input images are ImageNet-normalised; all attacks internally un-normalise to [0, 1] pixel space, apply perturbations, clamp to [0, 1], and re-normalise before returning adversarial examples. This ensures that the measured L∞ perturbation in pixel space exactly matches the configured ε.
-
-### 5.1 FGSM (Fast Gradient Sign Method)
-
-FGSM (Goodfellow et al., 2014) computes a single-step gradient-sign perturbation:
-
-$$\mathbf{x}_{\text{adv}} = \mathbf{x} + \varepsilon \cdot \text{sign}\left(\nabla_{\mathbf{x}} \mathcal{L}(\theta, \mathbf{x}, y)\right)$$
-
-where $\mathcal{L}$ is the cross-entropy loss, $\theta$ are the model parameters, and $\varepsilon$ is the perturbation bound.
-
-| Parameter | Value |
-|-----------|-------|
-| ε | 8/255 ≈ 0.03137 |
-| Norm | L∞ |
-| Steps | 1 |
-| Targeted | No |
-| Implementation | `torchattacks.FGSM` |
-
-FGSM is used both as an evaluation attack and as the adversarial training attack in the AT and AT+KD defenses, ensuring consistency between the training threat model and the evaluation threat model.
-
-### 5.2 PGD (Projected Gradient Descent)
-
-PGD (Madry et al., 2018) iteratively refines the adversarial perturbation through multiple gradient steps, projecting back onto the L∞ ball after each step:
-
-$$\mathbf{x}^{(t+1)} = \Pi_{\mathcal{B}_\infty(\mathbf{x}, \varepsilon)}\left(\mathbf{x}^{(t)} + \alpha \cdot \text{sign}\left(\nabla_{\mathbf{x}} \mathcal{L}(\theta, \mathbf{x}^{(t)}, y)\right)\right)$$
-
-where $\Pi_{\mathcal{B}_\infty(\mathbf{x}, \varepsilon)}$ denotes projection onto the L∞ ball of radius ε centred at the clean input $\mathbf{x}$, and $\alpha$ is the step size.
-
-| Parameter | Value |
-|-----------|-------|
-| ε | 8/255 ≈ 0.03137 |
-| α (step size) | 2/255 ≈ 0.00784 |
-| Steps | 20 |
-| Norm | L∞ |
-| Targeted | No |
-| Implementation | `torchattacks.PGD` |
-
-PGD with 20 steps and α = 2/255 is the standard configuration in the adversarial robustness literature and is sufficient to find strong adversarial examples under the L∞ constraint.
-
-### 5.3 Adversarial Patch Attack
-
-The adversarial patch attack (Brown et al., 2017) optimises a localised, visually conspicuous patch that causes misclassification when applied to any image. Unlike FGSM and PGD, the patch is not constrained to be imperceptible — it is physically realisable and can be printed and placed on real-world objects.
-
-**Patch optimisation:** A 32×32 pixel patch is initialised uniformly and optimised by maximising the cross-entropy loss via sign-based gradient ascent:
-
-$$\mathbf{p}^{(t+1)} = \text{clip}_{[0,1]}\left(\mathbf{p}^{(t)} + \eta \cdot \text{sign}\left(\nabla_{\mathbf{p}} \mathcal{L}(\theta, \mathbf{x} \oplus \mathbf{p}, y)\right)\right)$$
-
-where $\mathbf{p}$ is the patch, $\eta$ is the patch learning rate, and $\mathbf{x} \oplus \mathbf{p}$ denotes the image with the patch applied at a uniformly random location.
-
-| Parameter | Value |
-|-----------|-------|
-| Patch size | 32 × 32 pixels |
-| Image size | 224 × 224 pixels |
-| Patch area | ~2% of image area |
-| Optimisation steps | 150 |
-| Patch learning rate (η) | 0.05 |
-| Placement | Uniformly random per batch |
-| Norm constraint | Clamped to [0, 1] per step |
-| Loss | Cross-entropy (maximised) |
-
-The patch is evaluated on a 500-image subset of the validation set rather than the full 5,000-image subset, as 150 optimisation steps per batch makes the patch attack approximately 7.5× more expensive than FGSM or PGD per image.
-
----
-
-## 6. Evaluation Metrics
-
-Four metrics are recorded for every (model, compression, defense, attack) combination:
+# 3. Methodology
+
+This study evaluates whether adversarial defenses remain effective after
+post-training quantization (PTQ) of a Vision Transformer (ViT) intended for edge
+deployment, and whether their effectiveness degrades as quantization becomes more
+aggressive. The experimental design enforces a strict *compress-first, defend-second*
+pipeline that mirrors a realistic edge workflow. All hyperparameters are read from a
+single configuration file (`configs/base.yaml`), which is the authoritative source
+for every value reported below; no hyperparameter is hardcoded in the experiment
+scripts.
+
+## 3.1 Dataset and Preprocessing
+
+All experiments use **ImageNette** (`imagenette2`), a ten-class subset of ImageNet-1k
+consisting of the synsets *tench, English springer, cassette player, chain saw,
+church, French horn, garbage truck, gas pump, golf ball,* and *parachute*. The
+dataset provides **training** and **validation** splits only; there is no separate
+held-out test split, and the validation split is used for all robustness reporting.
+The full splits are used: the validation split contains $\approx 3{,}925$ images
+(`val_subset_size` $= 3925$, capped to the available count) and the training split
+$\approx 9{,}469$ images (`train_subset_size` $= 9469$). Images are read via
+`torchvision.datasets.ImageFolder`.
+
+Because the backbone is pretrained on the full ImageNet-1k label space, each
+ImageNette synset is remapped at load time from its ten-way `ImageFolder` index to
+its corresponding ImageNet-1k class index (e.g. *tench* $\rightarrow 0$, *English
+springer* $\rightarrow 217$, *church* $\rightarrow 497$, *parachute* $\rightarrow
+701$). This allows the $1000$-way pretrained classifier to be evaluated directly,
+without replacing the classification head.
+
+**Input resolution and normalization.** All inputs are $224 \times 224$ and are
+normalized with the standard ImageNet statistics, per channel
+$\mu = (0.485, 0.456, 0.406)$ and $\sigma = (0.229, 0.224, 0.225)$.
+
+**Augmentation per phase.**
+- *Clean evaluation (Phases 1–3):* `Resize(256)` $\rightarrow$ `CenterCrop(224)`
+  $\rightarrow$ `ToTensor` $\rightarrow$ `Normalize`. No stochastic augmentation.
+- *Defense fine-tuning (AT and AT+KD):* `RandomResizedCrop(224)` $\rightarrow$
+  `RandomHorizontalFlip` $\rightarrow$ `ToTensor` $\rightarrow$ `Normalize`. AT and
+  AT+KD use identical augmentation.
+
+**Determinism and subsets.** A global seed of $42$ is set for `random`, `numpy`, and
+`torch` (all CUDA devices) at the start of every script; subsets are drawn with a
+seeded `torch.randperm`, making image ordering reproducible across runs and phases.
+The patch and combined attacks — which require many gradient-ascent steps per batch
+($\approx 7.5\times$ the cost of FGSM/PGD) — are evaluated on a fixed prefix of the
+first $500$ validation images from the same permutation, i.e. a strict subset of the
+full evaluation set, with clean accuracy recomputed on that subset.
+
+## 3.2 Model Architecture
+
+The model under study is **DeiT-S** (`deit_small_patch16_224`), a data-efficient
+Vision Transformer. It is instantiated from `timm` with ImageNet-1k pretrained
+weights and placed in evaluation mode prior to inference.
+
+| Specification | Value |
+|---|---|
+| Variant | DeiT-S (`deit_small_patch16_224`) |
+| Pretraining | ImageNet-1k (via `timm`, `pretrained=True`) |
+| Input resolution | $224 \times 224$ |
+| Patch size | $16 \times 16$ |
+| Transformer blocks | $12$ |
+| Parameters | $\approx 22\text{M}$ |
+| Output classes | $1000$ |
+
+All compression levels are built from this single `timm` model: the quantized
+variants are produced by replacing the model's linear layers in place (Section 3.3),
+not by loading a separate checkpoint. Model outputs are routed through a thin
+`LogitsWrapper` that returns a plain $(N, C)$ logits tensor regardless of whether the
+underlying module returns a raw tensor or a dataclass, providing a uniform interface
+for the attack library and the evaluation loop. DeiT-B is excluded to remain within
+the GPU compute budget; DeiT-S is used uniformly as attacker, defender, and teacher.
+
+## 3.3 Post-Training Quantization Setup
+
+Three compression levels are studied — **FP32**, **INT8**, and **INT4** — all
+declared as compression levels in the configuration and evaluated in every phase. All
+compression is *post-training* (no quantization-aware training), and only the
+**linear (weight) layers** are quantized; activations are not quantized, and
+LayerNorm, embeddings, and the patch-projection convolution are left in their native
+precision. Quantization is **data-free**: no calibration dataset is used, since the
+NF4 scheme quantizes pretrained weights directly via block-wise normalization. The
+quantization backend is `bitsandbytes`.
+
+- **FP32 (baseline).** Full-precision pretrained DeiT-S; establishes the
+  clean-accuracy and robustness upper bound and serves as the frozen teacher in
+  AT+KD.
+
+- **INT8.** Genuine 8-bit weight quantization via `bitsandbytes` `Linear8bitLt`. Every
+  `nn.Linear` layer is replaced in place with a `bnb.nn.Linear8bitLt` layer
+  (`has_fp16_weights=False`); weights are stored as true 8-bit integers and matrix
+  multiplications use the cuBLAS-LT 8-bit kernel. The replacement is performed on CPU
+  before the model is moved to CUDA, which triggers bitsandbytes to quantize the
+  weights on the first `.cuda()` call. This path requires CUDA compute capability
+  $\geq 7.0$ (`sm_70`); the NVIDIA Tesla T4 is `sm_75` and fully supports it.
+
+- **INT4 (NF4).** Genuine 4-bit **NormalFloat-4 (NF4)** quantization via
+  `bitsandbytes`. Every `nn.Linear` layer is replaced in place with a
+  `bnb.nn.Linear4bit` layer storing weights as `Params4bit` in NF4 format with FP16
+  compute dtype (`bnb_4bit_quant_type="nf4"`, `bnb_4bit_compute_dtype=float16`). NF4
+  is the quantization scheme popularized by QLoRA (Dettmers et al., 2023). All
+  quantized tensors have gradients disabled.
+
+**Compression ratio.** Relative to FP32, weight precision is reduced by $\approx
+2\times$ for INT8 (32-bit $\rightarrow$ 8-bit) and $\approx 8\times$ for NF4 INT4
+(32-bit $\rightarrow$ 4-bit). The repository measures parameter footprint via
+`get_model_size_mb()` but does not log a stored on-disk compression ratio.
+[EXACT ON-DISK COMPRESSION RATIO NOT FOUND IN CODE]
+
+## 3.4 Threat Model
+
+All attacks are **untargeted, white-box** attacks: the adversary has full access to
+the model under evaluation (including compressed and/or defended weights) and
+backpropagates through it. The white-box setting is adopted as a worst-case adversary
+that yields a conservative (lower-bound) estimate of robustness; in Phase 2 the
+attack is constructed against the defended model itself, making the evaluation
+adaptive with respect to the defended weights.
+
+All perturbations are realized in **pixel space**. Inputs are ImageNet-normalized, so
+each attack is configured with `set_normalization_used(mean, std)` (for `torchattacks`)
+or performs explicit un-normalization (for the custom patch attack): the attack
+un-normalizes to $[0, 1]$, applies and clips the perturbation, and re-normalizes
+before the forward pass, guaranteeing the realized $\ell_\infty$ budget equals
+$\epsilon$ in $[0, 1]$ space. A pre-training sanity check asserts the measured
+pixel-space $\ell_\infty$ is within $\pm 10\%$ of $\epsilon$.
+
+- **FGSM.** Single-step $\ell_\infty$ attack (`torchattacks.FGSM`):
+  $x_{\text{adv}} = \mathrm{clip}_{[0,1]}\!\big(x + \epsilon\,\mathrm{sign}(\nabla_x \mathcal{L}(f(x), y))\big)$,
+  with $\epsilon = 8/255 \approx 0.03137$.
+
+- **PGD.** Iterative $\ell_\infty$ attack (`torchattacks.PGD`):
+  $x^{(t+1)} = \Pi_{\mathcal{B}_\infty(x,\epsilon)}\!\big(x^{(t)} + \alpha\,\mathrm{sign}(\nabla_x \mathcal{L}(f(x^{(t)}), y))\big)$,
+  with $\epsilon = 8/255 \approx 0.03137$, step size $\alpha = 2/255 \approx 0.00784$,
+  and $20$ steps.
+
+- **Adversarial Patch.** A custom localized attack optimizing a $32 \times 32$ pixel
+  patch ($\approx 2\%$ of image area) at a uniformly random location, via $150$
+  PGD-style sign-gradient ascent steps with step size $\eta = 0.05$, maximizing
+  cross-entropy. The patch is unbounded within its support (clipped only to $[0,1]$).
+
+- **AutoAttack.** **Not implemented in this codebase.** The requested AutoAttack
+  benchmark is absent; robustness is reported under FGSM, PGD, the patch attack, and
+  the combined attack below. [AUTOATTACK NOT FOUND IN CODE]
+
+**Phase 3 combined attack.** The combined attack chains the three attacks
+**sequentially** — FGSM $\rightarrow$ PGD $\rightarrow$ Patch — with the adversarial
+output of each stage feeding the next and all stages sharing the ground-truth labels.
+It is the strongest perturbation considered and is evaluated on the $500$-image subset.
+
+## 3.5 Adversarial Training — Phase 2a
+
+Phase 2a applies **Adversarial Training (AT)** to the already-compressed model. The
+defense is explicitly applied **after** quantization (compress-first-then-defend),
+and the quantized weights are **frozen** throughout: only floating-point parameters
+are trainable, so the packed integer NF4 weights cannot receive gradient updates.
+
+The AT variant used is **single-step (FGSM-based) adversarial training** — not
+PGD-AT or TRADES. At each step, adversarial inputs are generated with FGSM at the
+training budget $\epsilon_{\text{train}} = 8/255 \approx 0.03137$ (matching the
+evaluation budget) and the model is optimized under a standard cross-entropy loss:
+$$
+\mathcal{L}_{\text{AT}} = \mathrm{CE}\!\big(f_\theta(x_{\text{adv}}),\, y\big),
+\qquad x_{\text{adv}} = \mathrm{FGSM}(f_\theta, x, y;\, \epsilon_{\text{train}}).
+$$
+
+To protect fragile quantized weights and stay within budget, fine-tuning is
+**parameter-efficient**: the backbone is frozen and only the **last four transformer
+blocks** and the **classifier head** are updated. Optimization settings:
+
+| Setting | Value |
+|---|---|
+| Optimizer | AdamW, weight decay $0.01$ |
+| Epochs | $7$ |
+| Batch size | $16$ |
+| LR schedule | linear warmup: epoch 1 at $\mathrm{lr}/10$, full LR from epoch 2 |
+| Base LR (FP32) | $1 \times 10^{-5}$ |
+| Base LR (INT8) | $5 \times 10^{-6}$ |
+| Base LR (INT4) | $1 \times 10^{-6}$ |
+| Training $\epsilon$ | $8/255 \approx 0.03137$ |
+| Checkpointing | every epoch |
+
+Per-compression learning rates are used because AdamW with layer freezing requires
+smaller steps than full fine-tuning, and more aggressively quantized weights are more
+fragile.
+
+## 3.6 Adversarial Training with Knowledge Distillation — Phase 2b
+
+Phase 2b augments AT with **knowledge distillation (KD)** from a teacher. The teacher
+is the **full-precision (FP32) pretrained DeiT-S**, i.e. it is *not* adversarially
+trained; it is the clean, uncompressed model. The teacher is held in `eval()` mode
+with gradients disabled, every teacher forward pass is wrapped in `torch.no_grad()`,
+and the frozen state is re-asserted each epoch, so the teacher is never updated.
+
+Both teacher and student are queried on the **same adversarial inputs** ($x_{\text{adv}}$
+generated with FGSM against the student) — the teacher is *not* queried on clean
+inputs. The loss combines hard-label cross-entropy with a temperature-scaled KL
+divergence (Hinton et al., 2015):
+$$
+\mathcal{L}_{\text{AT+KD}}
+= \alpha \cdot \mathrm{CE}\!\big(f_S(x_{\text{adv}}),\, y\big)
++ (1-\alpha)\cdot \tau^2 \cdot \mathrm{KL}\!\Big(\sigma\!\big(\tfrac{z_S}{\tau}\big) \,\big\|\, \sigma\!\big(\tfrac{z_T}{\tau}\big)\Big),
+$$
+where $z_S, z_T$ are the student and teacher logits on $x_{\text{adv}}$,
+$\sigma$ is the softmax, the temperature is $\tau = 4.0$, and the cross-entropy
+weight is $\alpha = 0.5$ (KL weight $1-\alpha = 0.5$). The $\tau^2$ factor restores
+the gradient magnitude attenuated by temperature scaling. All optimizer, schedule,
+epoch, batch-size, learning-rate, layer-freezing, and checkpointing settings are
+**identical to Phase 2a** (Section 3.5).
+
+## 3.7 Experimental Pipeline and Design Rationale
+
+The pipeline is fixed as:
+$$
+\text{Pretrained DeiT-S (FP32)} \;\rightarrow\; \text{Compress (PTQ)} \;\rightarrow\; \text{Defend (AT / AT+KD)} \;\rightarrow\; \text{Attack} \;\rightarrow\; \text{Measure}.
+$$
+We deliberately **compress first, then defend**. This reflects edge deployment, where
+a model is quantized to satisfy on-device memory and latency constraints *before* any
+robustness hardening, and where the defended artifact must itself be the compressed
+model. The contrasting *defend-then-compress* ordering — e.g. quantization-aware
+adversarial training, where robust weights are learned and then quantized — is
+ill-suited to this scenario: it presumes access to the full training pipeline at the
+target precision and risks the quantization step degrading the robustness that
+training installed, so the deployed (compressed) model is no longer the one whose
+robustness was validated. Studying robustness recovery *on the already-compressed
+model* therefore matches the operational constraint.
+
+The full experimental grid is $\{\text{FP32}, \text{INT8}, \text{INT4}\} \times
+\{\text{Undefended}, \text{AT}, \text{AT+KD}\}$, each evaluated under multiple
+attacks:
+
+| Compression \ Defense | Undefended (Phase 1) | AT (Phase 2a) | AT+KD (Phase 2b) |
+|---|---|---|---|
+| FP32 | FGSM, PGD, Patch | FGSM, PGD, Patch | FGSM, PGD, Patch |
+| INT8 | FGSM, PGD, Patch | FGSM, PGD, Patch | FGSM, PGD, Patch |
+| INT4 | FGSM, PGD, Patch | FGSM, PGD, Patch | FGSM, PGD, Patch |
+
+Phase 3 additionally evaluates the **combined attack** against all nine
+$\{\text{compression}\} \times \{\text{none}, \text{AT}, \text{AT+KD}\}$ cells. In
+total the study comprises $36$ evaluated configurations.
+
+## 3.8 Evaluation Protocol and Metrics
+
+For every configuration we record four metrics, all in $[0,1]$ and computed from
+top-1 `argmax` predictions:
 
 | Metric | Definition |
-|--------|-----------|
-| **Clean accuracy** | $\text{Acc}_\text{clean} = \frac{1}{N}\sum_{i=1}^{N} \mathbf{1}[\hat{y}_i = y_i]$ on clean inputs |
-| **Robust accuracy** | $\text{Acc}_\text{robust} = \frac{1}{N}\sum_{i=1}^{N} \mathbf{1}[\hat{y}_i^{\text{adv}} = y_i]$ on adversarial inputs |
-| **Attack success rate (ASR)** | $\text{ASR} = 1 - \text{Acc}_\text{robust}$ |
-| **Robustness gap** | $\Delta = \text{Acc}_\text{clean} - \text{Acc}_\text{robust}$ |
+|---|---|
+| Clean accuracy ($\mathrm{acc}_{\text{clean}}$) | top-1 accuracy on clean inputs |
+| Robust accuracy ($\mathrm{acc}_{\text{rob}}$) | top-1 accuracy on adversarial inputs |
+| Attack success rate (ASR) | $1 - \mathrm{acc}_{\text{rob}}$ (untargeted) |
+| Robustness gap | $\mathrm{acc}_{\text{clean}} - \mathrm{acc}_{\text{rob}}$ |
 
-All metrics are computed over the same deterministic validation subset (seed=42) across all phases, ensuring direct comparability. For the patch attack, clean accuracy is re-computed on the 500-image subset so that the denominator matches the robust accuracy denominator.
+Accuracy degradation relative to the FP32 baseline is reported as
+$\Delta = \mathrm{acc}^{\text{FP32}} - \mathrm{acc}^{\text{quant}}$ for the
+corresponding (defense, attack) cell, capturing the clean- and robust-accuracy cost
+of compression. Clean accuracy is computed once per (compression, defense) model and
+reused across attacks on the full validation set; for the patch and combined attacks
+it is recomputed on the $500$-image subset so that all metrics share a common
+denominator. Each result row also records a UTC timestamp, model, compression,
+defense, attack, and phase; rows are written incrementally and each script skips
+already-completed configurations, making every phase resumable.
 
-Results are written to CSV immediately after each (compression, attack) evaluation, enabling incremental recovery from interruption without recomputation.
+**AutoAttack as trustworthy benchmark.** AutoAttack is *not* used in this study (it
+is not implemented); the strongest evaluation is the sequential combined attack.
+**Variance / seeds.** Each configuration is evaluated **once** on the fixed,
+seed-$42$ validation subset; no multi-seed runs are performed and no variance is
+reported. Determinism makes results exactly reproducible given identical weights and
+environment. [MULTI-SEED VARIANCE NOT FOUND IN CODE]
 
----
+## 3.9 Implementation Details
 
-## 7. Experimental Setup
+The implementation uses **PyTorch** (target build `torch==2.3.1+cu121`,
+`torchvision==0.18.1+cu121`) on **CUDA 12.1**. Models are instantiated with
+`timm` ($\geq 0.9.0$); attacks use `torchattacks` ($\geq 3.4.0$) for FGSM and PGD,
+with the patch and combined attacks implemented in-repository; quantization uses
+`bitsandbytes` ($\geq 0.41.0$) for NF4 INT4; configuration is loaded from YAML via
+`PyYAML`. Evaluation uses a batch size of $32$ with two DataLoader workers; defense
+fine-tuning uses a batch size of $16$.
 
-### 7.1 Evaluation Protocol
-
-- **Validation subset**: 5,000 images drawn deterministically from the Imagenette2-320 validation split using `torch.randperm(seed=42)`.
-- **Patch evaluation subset**: 500 images as a strict prefix of the 5,000-image validation subset.
-- **Training subset**: 10,000 images drawn deterministically from the training split using `torch.randperm(seed=42)`.
-- **Batch size (eval)**: 32.
-- **Batch size (training)**: 16.
-- No cross-validation is performed — the validation subset is fixed across all phases to ensure metric comparability.
-
-### 7.2 Resumability
-
-All experiment scripts implement CSV-based resumability: completed (model, compression, defense, attack) tuples are read from the results CSV at startup, and any already-completed combinations are skipped. This ensures that partial runs due to hardware interruption can be resumed without duplicating results.
-
-### 7.3 Random Seeds
-
-All randomness is seeded at the start of every script:
-
-```python
-random.seed(42)
-np.random.seed(42)
-torch.manual_seed(42)
-torch.cuda.manual_seed_all(42)
-```
-
-### 7.4 Statistical Reporting
-
-Each (compression, defense, attack) cell is evaluated once on the fixed 5,000-image (or 500-image for patch) validation subset. No repeated trials are performed. Variance across seeds is not reported; the deterministic subset selection ensures that all reported numbers are reproducible exactly given the same model weights and environment.
-
----
-
-## 8. Ablation Studies
-
-### 8.1 Compression Level Sensitivity
-
-The primary ablation is the compression level sweep (INT8 → INT4). This directly quantifies how aggressively PTQ degrades both clean accuracy and adversarial robustness, and whether AT and AT+KD can recover robustness at each level.
-
-### 8.2 Defense Comparison
-
-AT vs. AT+KD at each compression level constitutes a controlled ablation of the knowledge distillation component. Both defenses share identical training configurations; the only difference is the addition of the KL divergence term and the frozen FP32 teacher in AT+KD.
-
----
-
-## 9. Reproducibility
-
-### 9.1 Code
-
-All code is available at: **https://github.com/Jmanav/ADVC**
-
-The repository includes:
-- `configs/base.yaml` — single source of truth for all hyperparameters
-- `attacks/` — FGSM, PGD, and Patch attack implementations
-- `defenses/` — AT and AT+KD fine-tuning implementations
-- `experiments/` — Phase 1, 2a, and 2b evaluation scripts
-- `notebooks/run_phases_local.ipynb` — end-to-end notebook for reproducing all results
-
-### 9.2 Library Versions
-
-| Library | Minimum Version |
-|---------|----------------|
-| PyTorch | ≥ 2.1.0 |
-| torchvision | ≥ 0.16.0 |
-| timm | ≥ 0.9.0 |
-| torchattacks | ≥ 3.4.0 |
-| bitsandbytes | ≥ 0.41.0 |
-| transformers | ≥ 4.35.0 |
-| accelerate | ≥ 0.24.0 |
-| PyYAML | ≥ 6.0 |
-| tqdm | ≥ 4.0.0 |
-
-### 9.3 Computational Requirements
-
-| Resource | Specification |
-|----------|--------------|
-| GPU | NVIDIA H100 (8.6 GB VRAM slice) |
-| CPU | 1 core Intel Xeon Platinum 8480+ |
-| RAM | 28 GB |
-| Phase 1 (baseline eval) | ~30–45 min |
-| Phase 2a (AT, 2 compression levels) | ~1.5–2 hr |
-| Phase 2b (AT+KD, 2 compression levels) | ~1.5–2 hr |
-| **Total** | **~4–5 hr** |
-
-### 9.4 Environment Setup
-
-To reproduce all results:
-
-```bash
-git clone https://github.com/Jmanav/ADVC.git
-cd ADVC
-pip install -r requirements.txt
-# Edit configs/base.yaml to set dataset.val_dir and dataset.train_dir
-python experiments/eval_phase1.py --model deit_small
-python experiments/eval_phase2_at.py --model deit_small
-python experiments/eval_phase2_atkd.py --model deit_small
-```
-
-All scripts are fully resumable — they can be interrupted and restarted without recomputing completed rows.
-
----
+The experiments were run on **Kaggle Notebooks** using a **dual NVIDIA Tesla T4
+($2\times$ T4, 16 GB VRAM each)** accelerator under Kaggle's free-tier weekly
+GPU-hour budget. Both INT8 (`Linear8bitLt`) and INT4 (NF4 `Linear4bit`) use genuine
+`bitsandbytes` quantization. All randomness is seeded with $42$
+(`random`, `numpy`, `torch`, and all CUDA devices). The code is available at
+**https://github.com/Jmanav/ADVC**.
 
 ## References
 
-- Brown, T. B., Mané, D., Roy, A., Abadi, M., & Gilmer, J. (2017). *Adversarial patch*. arXiv:1712.09665.
-- Dettmers, T., Pagnoni, A., Holtzman, A., & Zettlemoyer, L. (2023). *QLoRA: Efficient finetuning of quantized LLMs*. NeurIPS 2023.
-- Goodfellow, I. J., Shlens, J., & Szegedy, C. (2014). *Explaining and harnessing adversarial examples*. arXiv:1412.6572.
-- Hinton, G., Vinyals, O., & Dean, J. (2015). *Distilling the knowledge in a neural network*. arXiv:1503.02531.
-- Madry, A., Makelov, A., Schmidt, L., Tsipras, D., & Vladu, A. (2018). *Towards deep learning models resistant to adversarial attacks*. ICLR 2018.
-- Touvron, H., Cord, M., Douze, M., Massa, F., Sablayrolles, A., & Jégou, H. (2021). *Training data-efficient image transformers & distillation through attention*. ICML 2021.
+- Dettmers, T., Pagnoni, A., Holtzman, A., & Zettlemoyer, L. (2023). *QLoRA: Efficient Finetuning of Quantized LLMs*. NeurIPS 2023.
+- Goodfellow, I. J., Shlens, J., & Szegedy, C. (2015). *Explaining and Harnessing Adversarial Examples*. ICLR 2015. arXiv:1412.6572.
+- Hinton, G., Vinyals, O., & Dean, J. (2015). *Distilling the Knowledge in a Neural Network*. arXiv:1503.02531.
+- Madry, A., Makelov, A., Schmidt, L., Tsipras, D., & Vladu, A. (2018). *Towards Deep Learning Models Resistant to Adversarial Attacks*. ICLR 2018.
+- Touvron, H., Cord, M., Douze, M., Massa, F., Sablayrolles, A., & Jégou, H. (2021). *Training Data-Efficient Image Transformers & Distillation Through Attention*. ICML 2021.

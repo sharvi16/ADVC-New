@@ -88,24 +88,41 @@ def _load_fp32(timm_name: str, device: str) -> torch.nn.Module:
 
 def _load_int8(timm_name: str, device: str) -> torch.nn.Module:
     """
-    Load INT8-equivalent model as fp16.
+    Load INT8 quantized model via bitsandbytes Linear8bitLt.
 
-    bitsandbytes INT8 (Linear8bitLt) requires CUDA sm_70+; P100 is sm_60 and
-    the cuBLAS LT kernel hard-crashes at runtime. We simulate INT8 compression
-    by casting all Linear weights to fp16, which gives the same ~2x memory
-    reduction and closely approximates the precision loss of INT8 quantization.
-    This is the standard fallback for sm_60 hardware.
+    Requires CUDA sm_70+ (T4 is sm_75 — supported). Linear8bitLt stores weights
+    as true 8-bit integers and uses cuBLAS-LT for matrix multiply; weights are
+    quantized on the first .cuda() call. The replacement must happen on CPU before
+    moving to device, otherwise bitsandbytes cannot intercept the weight layout.
     """
+    import bitsandbytes as bnb
+
     model = timm.create_model(timm_name, pretrained=True)
+
+    def _replace_linear_int8(module: torch.nn.Module) -> None:
+        for name, child in module.named_children():
+            if isinstance(child, torch.nn.Linear):
+                new_layer = bnb.nn.Linear8bitLt(
+                    child.in_features,
+                    child.out_features,
+                    bias=child.bias is not None,
+                    has_fp16_weights=False,
+                )
+                new_layer.weight = torch.nn.Parameter(
+                    child.weight.data.clone(), requires_grad=False
+                )
+                if child.bias is not None:
+                    new_layer.bias = torch.nn.Parameter(
+                        child.bias.data.clone(), requires_grad=False
+                    )
+                setattr(module, name, new_layer)
+            else:
+                _replace_linear_int8(child)
+
+    _replace_linear_int8(model)
+    # Moving to CUDA triggers bitsandbytes weight quantization to int8.
     model = model.to(device)
-
-    for module in model.modules():
-        if isinstance(module, torch.nn.Linear):
-            module.weight = torch.nn.Parameter(
-                module.weight.data.half().float(), requires_grad=False
-            )
-
-    print(f"[loader] INT8 (fp16 sim): cast Linear weights to fp16 precision on {device}")
+    print(f"[loader] INT8 (bitsandbytes Linear8bitLt): quantized Linear weights to int8 on {device}")
     return model
 
 

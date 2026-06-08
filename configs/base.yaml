@@ -18,7 +18,7 @@ compression:
   levels: ["fp32", "int8", "int4"]
   int8:
     backend: "bitsandbytes"
-    load_in_8bit: true
+    method: "Linear8bitLt"   # true int8 via bitsandbytes — requires sm_70+ (T4 is sm_75)
   int4:
     backend: "bitsandbytes"
     load_in_4bit: true
