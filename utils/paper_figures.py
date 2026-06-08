@@ -337,6 +337,9 @@ def fig2_asr_vs_epsilon(
     mean, std = cfg["dataset"]["mean"], cfg["dataset"]["std"]
 
     asr_fgsm, asr_pgd = [], []
+    # Use fewer PGD steps here — this is a visualization sweep, not an experiment.
+    # Full 20 steps × 9 epsilons × INT8/INT4 models OOMs on T4 16GB.
+    pgd_steps_viz = min(cfg["pgd"]["steps"], 10)
 
     for eps in epsilons:
         # FGSM — attack needs gradients; only suppress them for the prediction
@@ -346,18 +349,23 @@ def fig2_asr_vs_epsilon(
         with torch.no_grad():
             preds = model(adv).argmax(dim=1)
         asr_fgsm.append((preds != lbls).float().mean().item())
+        del atk, adv, preds
 
         # PGD — keep alpha proportional (alpha = eps/4, min 0.5/255)
         alpha = max(eps / 4.0, 0.5 / 255.0)
         atk2 = torchattacks.PGD(
             model, eps=eps, alpha=alpha,
-            steps=cfg["pgd"]["steps"],
+            steps=pgd_steps_viz,
         )
         atk2.set_normalization_used(mean=mean, std=std)
         adv2 = atk2(imgs, lbls)
         with torch.no_grad():
             preds2 = model(adv2).argmax(dim=1)
         asr_pgd.append((preds2 != lbls).float().mean().item())
+        del atk2, adv2, preds2
+
+        if device == "cuda":
+            torch.cuda.empty_cache()
 
     eps_labels = [f"{round(e * 255)}/255" for e in epsilons]
 
