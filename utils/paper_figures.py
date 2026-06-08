@@ -325,7 +325,10 @@ def fig2_asr_vs_epsilon(
     if epsilons is None:
         epsilons = [k / 255.0 for k in [1, 2, 4, 6, 8, 10, 12, 14, 16]]
 
-    loader = _build_loader(cfg, n_eval, device)
+    # bitsandbytes INT8/INT4 matmul allocates large int32 buffers per batch.
+    # Cap batch size at 32 to avoid OOM across 18 attack passes on T4 16GB.
+    n_eval_capped = min(n_eval, 32)
+    loader = _build_loader(cfg, n_eval_capped, device)
     images, labels = next(iter(loader))
 
     model = _load(model_name, compression, cfg, device)
