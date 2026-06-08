@@ -1,0 +1,40 @@
+\begin{table}[t]
+\centering
+\caption{Quantitative evaluation of DeiT-S under adversarial attacks across compression levels and defenses.}
+\label{tab:quantitative}
+\small
+\begin{tabular}{llllllll}
+\toprule
+Compression & Defense & Attack & Clean Acc & Robust Acc & ASR & Gap & PSNR (dB) \\ \midrule
+FP32 & No defense & FGSM & 0.8500 & 0.6140 & 0.3860 & 0.2360 & 30.2000 \\
+FP32 & AT & FGSM & 0.9847 & 0.8056 & 0.1944 & 0.1791 & 30.2000 \\
+FP32 & AT+KD & FGSM & 0.9944 & 0.8357 & 0.1643 & 0.1587 & 30.2000 \\
+FP32 & No defense & PGD & 0.8500 & 0.0790 & 0.9210 & 0.7710 & 33.4100 \\
+FP32 & AT & PGD & 0.9847 & 0.0000 & 1.0000 & 0.9847 & 33.4100 \\
+FP32 & AT+KD & PGD & 0.9944 & 0.0000 & 1.0000 & 0.9944 & 33.4100 \\
+FP32 & No defense & Patch & 0.8500 & 0.1920 & 0.8080 & 0.6580 & 23.5100 \\
+FP32 & AT & Patch & 0.9900 & 0.6880 & 0.3120 & 0.3020 & 23.5100 \\
+FP32 & AT+KD & Patch & 0.9944 & 0.7480 & 0.2520 & 0.2480 & 23.5100 \\
+\midrule
+INT8 & No defense & FGSM & 0.8973 & 0.3875 & 0.6125 & 0.5098 & 30.2000 \\
+INT8 & AT & FGSM & 0.9292 & 0.4265 & 0.5735 & 0.5027 & 30.2000 \\
+INT8 & AT+KD & FGSM & 0.9292 & 0.4255 & 0.5745 & 0.5037 & 30.2000 \\
+INT8 & No defense & PGD & 0.8973 & 0.0000 & 1.0000 & 0.8973 & 33.4000 \\
+INT8 & AT & PGD & 0.9292 & 0.0000 & 1.0000 & 0.9292 & 33.4000 \\
+INT8 & AT+KD & PGD & 0.9292 & 0.0000 & 1.0000 & 0.9292 & 33.4000 \\
+INT8 & No defense & Patch & 0.8973 & 0.3000 & 0.7000 & 0.5940 & 23.8300 \\
+INT8 & AT & Patch & 0.9180 & 0.3240 & 0.6760 & 0.5940 & 23.8300 \\
+INT8 & AT+KD & Patch & 0.9292 & 0.4040 & 0.5960 & 0.5140 & 23.8300 \\
+\midrule
+INT4 & No defense & FGSM & 0.8440 & 0.5650 & 0.4350 & 0.2790 & 30.2000 \\
+INT4 & AT & FGSM & 0.8994 & 0.3628 & 0.6372 & 0.5366 & 30.2000 \\
+INT4 & AT+KD & FGSM & 0.8994 & 0.3610 & 0.6390 & 0.5383 & 30.2000 \\
+INT4 & No defense & PGD & 0.8440 & 0.0650 & 0.9350 & 0.7790 & 33.4100 \\
+INT4 & AT & PGD & 0.8994 & 0.0000 & 1.0000 & 0.8994 & 33.4100 \\
+INT4 & AT+KD & PGD & 0.8994 & 0.0000 & 1.0000 & 0.8994 & 33.4100 \\
+INT4 & No defense & Patch & 0.8440 & 0.1110 & 0.8890 & 0.7330 & 23.6400 \\
+INT4 & AT & Patch & 0.8860 & 0.2300 & 0.7700 & 0.6560 & 23.6400 \\
+INT4 & AT+KD & Patch & 0.8994 & 0.2300 & 0.7700 & 0.6560 & 23.6400 \\
+\bottomrule
+\end{tabular}
+\end{table}
