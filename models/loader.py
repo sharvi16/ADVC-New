@@ -120,8 +120,15 @@ def _load_int8(timm_name: str, device: str) -> torch.nn.Module:
                 _replace_linear_int8(child)
 
     _replace_linear_int8(model)
-    # Moving to CUDA triggers bitsandbytes weight quantization to int8.
     model = model.to(device)
+
+    # Linear8bitLt weights are not actually quantized (CB buffer not populated)
+    # until the first forward pass. Run a dummy pass now so .CB exists before
+    # any downstream code (eval loop, FGSM, freeze check) touches the weights.
+    with torch.no_grad():
+        dummy = torch.zeros(1, 3, 224, 224, device=device)
+        model(dummy)
+
     print(f"[loader] INT8 (bitsandbytes Linear8bitLt): quantized Linear weights to int8 on {device}")
     return model
 
