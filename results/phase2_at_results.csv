@@ -1,0 +1,10 @@
+timestamp,model,compression,defense,attack,clean_acc,robust_acc,asr,robustness_gap,phase
+2026-06-07T18:29:55Z,deit_small,fp32,at,fgsm,0.984713,0.805605,0.194395,0.179108,2
+2026-06-07T18:40:16Z,deit_small,fp32,at,pgd,0.984713,0.0,1.0,0.984713,2
+2026-06-07T18:50:59Z,deit_small,fp32,at,patch,0.99,0.688,0.312,0.302,2
+2026-06-07T19:06:51Z,deit_small,int8,at,fgsm,0.995414,0.769682,0.230318,0.225733,2
+2026-06-07T19:17:02Z,deit_small,int8,at,pgd,0.995414,0.0,1.0,0.995414,2
+2026-06-07T19:27:36Z,deit_small,int8,at,patch,0.998,0.712,0.288,0.286,2
+2026-06-07T19:38:30Z,deit_small,int4,at,fgsm,0.899363,0.362803,0.637197,0.536561,2
+2026-06-07T19:44:43Z,deit_small,int4,at,pgd,0.899363,0.0,1.0,0.899363,2
+2026-06-07T19:50:37Z,deit_small,int4,at,patch,0.886,0.23,0.77,0.656,2
