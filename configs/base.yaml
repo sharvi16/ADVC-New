@@ -27,7 +27,7 @@ compression:
 
 # Dataset
 dataset:
-  name: "imagenette"
+  name: "imagenette"   # change to "cifar10" or "cifar100" when running those
   val_subset_size: 3925   # ImageNette val has ~3925 images total — use all of them
   train_subset_size: 9469  # ImageNette train has ~9469 images total — use all of them
   image_size: 224
@@ -37,6 +37,22 @@ dataset:
   # Extract the archive once per session (see CLAUDE.md → Kaggle session startup).
   val_dir: "/kaggle/working/imagenette2/val"
   train_dir: "/kaggle/working/imagenette2/train"
+
+datasets:
+  imagenette:
+    val_dir: "data/imagenette2-320/val"
+    train_dir: "data/imagenette2-320/train"
+    num_classes: 1000   # remapped to ImageNet-1k indices
+
+  cifar10:
+    num_classes: 10
+    download: true
+    image_size: 224     # upsampled from 32x32
+
+  cifar100:
+    num_classes: 100
+    download: true
+    image_size: 224
 
 # Attack - FGSM
 fgsm:

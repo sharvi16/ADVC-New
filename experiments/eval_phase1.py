@@ -117,28 +117,46 @@ def _remap_subset_labels(dataset: ImageFolder) -> ImageFolder:
     return dataset
 
 
-def build_val_loader(cfg: dict, device: str) -> DataLoader:
+def build_val_loader(cfg: dict, device: str, dataset: str = None) -> DataLoader:
     """Build a deterministic subset loader for the validation set.
 
-    Works with both full ImageNet-1k and ImageNette (10-class subset).
-    Labels are remapped to ImageNet-1k indices automatically when a subset
-    is detected (< 1000 classes).
+    Works with both CIFAR datasets (no remapping) and ImageNette (remapped).
 
     The subset is drawn with seed=42 via randperm, matching the fixed split
     described in configs/base.yaml so results are reproducible across runs.
     """
+    if dataset is None:
+        dataset = cfg["dataset"]["name"]
+
     ds_cfg = cfg["dataset"]
     eval_cfg = cfg["eval"]
 
-    transform = T.Compose([
-        T.Resize(256),
-        T.CenterCrop(ds_cfg["image_size"]),
-        T.ToTensor(),
-        T.Normalize(mean=ds_cfg["mean"], std=ds_cfg["std"]),
-    ])
-
-    full_dataset = ImageFolder(root=str(resolve_data_path(_ROOT, ds_cfg["val_dir"])), transform=transform)
-    full_dataset = _remap_subset_labels(full_dataset)
+    if dataset == "cifar10":
+        from torchvision.datasets import CIFAR10
+        transform = T.Compose([
+            T.Resize(ds_cfg["image_size"]),
+            T.ToTensor(),
+            T.Normalize(mean=ds_cfg["mean"], std=ds_cfg["std"]),
+        ])
+        full_dataset = CIFAR10(root="data/cifar", train=False, download=True, transform=transform)
+    elif dataset == "cifar100":
+        from torchvision.datasets import CIFAR100
+        transform = T.Compose([
+            T.Resize(ds_cfg["image_size"]),
+            T.ToTensor(),
+            T.Normalize(mean=ds_cfg["mean"], std=ds_cfg["std"]),
+        ])
+        full_dataset = CIFAR100(root="data/cifar", train=False, download=True, transform=transform)
+    else:
+        # existing ImageNette path unchanged
+        transform = T.Compose([
+            T.Resize(256),
+            T.CenterCrop(ds_cfg["image_size"]),
+            T.ToTensor(),
+            T.Normalize(mean=ds_cfg["mean"], std=ds_cfg["std"]),
+        ])
+        full_dataset = ImageFolder(root=str(resolve_data_path(_ROOT, ds_cfg["val_dir"])), transform=transform)
+        full_dataset = _remap_subset_labels(full_dataset)
 
     rng = torch.Generator()
     rng.manual_seed(cfg["seed"])
@@ -157,7 +175,7 @@ def build_val_loader(cfg: dict, device: str) -> DataLoader:
     return loader
 
 
-def build_patch_val_loader(cfg: dict, device: str) -> DataLoader:
+def build_patch_val_loader(cfg: dict, device: str, dataset: str = None) -> DataLoader:
     """Build a smaller validation loader used exclusively for the patch attack.
 
     The patch attack runs 150 PGD-style optimisation steps per batch, making
@@ -166,18 +184,38 @@ def build_patch_val_loader(cfg: dict, device: str) -> DataLoader:
     still producing a statistically meaningful ASR estimate.
     FGSM and PGD always use the full val_subset_size loader.
     """
+    if dataset is None:
+        dataset = cfg["dataset"]["name"]
+
     ds_cfg = cfg["dataset"]
     eval_cfg = cfg["eval"]
 
-    transform = T.Compose([
-        T.Resize(256),
-        T.CenterCrop(ds_cfg["image_size"]),
-        T.ToTensor(),
-        T.Normalize(mean=ds_cfg["mean"], std=ds_cfg["std"]),
-    ])
-
-    full_dataset = ImageFolder(root=str(resolve_data_path(_ROOT, ds_cfg["val_dir"])), transform=transform)
-    full_dataset = _remap_subset_labels(full_dataset)
+    if dataset == "cifar10":
+        from torchvision.datasets import CIFAR10
+        transform = T.Compose([
+            T.Resize(ds_cfg["image_size"]),
+            T.ToTensor(),
+            T.Normalize(mean=ds_cfg["mean"], std=ds_cfg["std"]),
+        ])
+        full_dataset = CIFAR10(root="data/cifar", train=False, download=True, transform=transform)
+    elif dataset == "cifar100":
+        from torchvision.datasets import CIFAR100
+        transform = T.Compose([
+            T.Resize(ds_cfg["image_size"]),
+            T.ToTensor(),
+            T.Normalize(mean=ds_cfg["mean"], std=ds_cfg["std"]),
+        ])
+        full_dataset = CIFAR100(root="data/cifar", train=False, download=True, transform=transform)
+    else:
+        # existing ImageNette path unchanged
+        transform = T.Compose([
+            T.Resize(256),
+            T.CenterCrop(ds_cfg["image_size"]),
+            T.ToTensor(),
+            T.Normalize(mean=ds_cfg["mean"], std=ds_cfg["std"]),
+        ])
+        full_dataset = ImageFolder(root=str(resolve_data_path(_ROOT, ds_cfg["val_dir"])), transform=transform)
+        full_dataset = _remap_subset_labels(full_dataset)
 
     # Draw from the same shuffled order as build_val_loader so the 500 images
     # are a strict prefix of the full val subset — results stay comparable.

@@ -47,6 +47,7 @@ def load_model(
     compression: CompressionLevel,
     config: dict,
     device: str = "cuda",
+    dataset: str = None,
 ) -> torch.nn.Module:
     """
     Load a DeiT model at the specified compression level.
@@ -56,19 +57,41 @@ def load_model(
         compression: "fp32", "int8", or "int4"
         config:      Parsed base.yaml config dict
         device:      "cuda" or "cpu"
+        dataset:     "imagenet", "cifar10", or "cifar100" (defaults to config dataset name)
 
     Returns:
         model: torch.nn.Module in eval mode, moved to device.
     """
+    if dataset is None:
+        dataset = config.get("dataset", {}).get("name", "imagenet")
+
+    num_classes = {"imagenet": 1000, "imagenette": 1000, "cifar10": 10, "cifar100": 100}[dataset]
     model_cfg = config["models"][model_name]
     timm_name = model_cfg["timm_name"]
 
+    if dataset not in ("imagenet", "imagenette"):
+        # Load with custom num_classes — replaces classification head
+        model = timm.create_model(
+            timm_name, pretrained=True, num_classes=num_classes
+        )
+        # Load fine-tuned CIFAR checkpoint if it exists
+        ckpt_path = f"checkpoints/finetuned/{model_name}_{dataset}_head.pt"
+        if os.path.exists(ckpt_path):
+            model.load_state_dict(torch.load(ckpt_path, map_location="cpu"))
+        else:
+            raise FileNotFoundError(
+                f"No fine-tuned checkpoint found at {ckpt_path}. "
+                f"Run scripts/finetune_cifar.py first."
+            )
+    else:
+        model = timm.create_model(timm_name, pretrained=True)
+
     if compression == "fp32":
-        model = _load_fp32(timm_name, device)
+        model = _load_fp32(model, device)
     elif compression == "int8":
-        model = _load_int8(timm_name, device)
+        model = _load_int8(model, device)
     elif compression == "int4":
-        model = _load_int4(timm_name, config, device)
+        model = _load_int4(model, config, device)
     else:
         raise ValueError(
             f"Unknown compression level: {compression!r}. "
@@ -79,14 +102,13 @@ def load_model(
     return model
 
 
-def _load_fp32(timm_name: str, device: str) -> torch.nn.Module:
-    """Load full-precision model via timm."""
-    model = timm.create_model(timm_name, pretrained=True)
+def _load_fp32(model: torch.nn.Module, device: str) -> torch.nn.Module:
+    """Load full-precision model to device."""
     model = model.to(device)
     return model
 
 
-def _load_int8(timm_name: str, device: str) -> torch.nn.Module:
+def _load_int8(model: torch.nn.Module, device: str) -> torch.nn.Module:
     """
     Load INT8 quantized model via bitsandbytes Linear8bitLt.
 
@@ -99,8 +121,6 @@ def _load_int8(timm_name: str, device: str) -> torch.nn.Module:
     to trigger quantization before any downstream code touches the weights.
     """
     import bitsandbytes as bnb
-
-    model = timm.create_model(timm_name, pretrained=True)
 
     def _replace_linear_int8(module: torch.nn.Module) -> None:
         for name, child in module.named_children():
@@ -137,7 +157,7 @@ def _load_int8(timm_name: str, device: str) -> torch.nn.Module:
     return model
 
 
-def _load_int4(timm_name: str, config: dict, device: str) -> torch.nn.Module:
+def _load_int4(model: torch.nn.Module, config: dict, device: str) -> torch.nn.Module:
     """
     Load INT4 (NF4) quantized model.
 
@@ -154,7 +174,6 @@ def _load_int4(timm_name: str, config: dict, device: str) -> torch.nn.Module:
     )
     quant_type = int4_cfg["bnb_4bit_quant_type"]  # "nf4"
 
-    model = timm.create_model(timm_name, pretrained=True)
     model = model.to(device)
 
     def _replace_linear_int4(module: torch.nn.Module) -> None:
