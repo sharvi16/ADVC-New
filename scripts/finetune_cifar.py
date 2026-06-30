@@ -11,7 +11,7 @@ import torchvision.transforms as T
 from torchvision.datasets import CIFAR10, CIFAR100
 from torch.utils.data import DataLoader
 
-def finetune(dataset_name="cifar10", epochs=15, lr=1e-4, head_epochs=3):
+def finetune(dataset_name="cifar10", epochs=10, lr=1e-4, head_epochs=3):
     num_classes = 10 if dataset_name == "cifar10" else 100
     DatasetClass = CIFAR10 if dataset_name == "cifar10" else CIFAR100
 
