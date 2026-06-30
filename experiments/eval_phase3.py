@@ -43,7 +43,7 @@ from utils.metrics import (
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-RESULTS_FILE = "results/phase3_results.csv"
+RESULTS_FILE = None
 PHASE = 3
 FIELDNAMES = [
     "timestamp",
@@ -354,7 +354,8 @@ def main() -> None:
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     global RESULTS_FILE
-    RESULTS_FILE = f"results/{cfg['dataset']['name']}_phase3_results.csv"
+    dataset = cfg["dataset"]["name"]
+    RESULTS_FILE = f"results/{dataset}_phase3_results.csv"
 
     print(f"[phase3] device  : {device}")
     print(f"[phase3] model   : {model_name}")
