@@ -27,7 +27,7 @@ compression:
 
 # Dataset
 dataset:
-  name: "imagenette"   # change to "cifar10" or "cifar100" when running those
+  name: "cifar10"   # change to "cifar10" or "cifar100" when running those
   val_subset_size: 3925   # ImageNette val has ~3925 images total — use all of them
   train_subset_size: 9469  # ImageNette train has ~9469 images total — use all of them
   image_size: 224
