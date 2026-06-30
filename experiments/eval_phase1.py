@@ -373,6 +373,9 @@ def main() -> None:
     cfg = load_config(str(_ROOT / "configs/base.yaml"))
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
+    global RESULTS_FILE
+    RESULTS_FILE = f"results/{cfg['dataset']['name']}_phase1_results.csv"
+
     print(f"[phase1] device      : {device}")
     print(f"[phase1] model       : {model_name}")
     print(f"[phase1] results     : {RESULTS_FILE}")
