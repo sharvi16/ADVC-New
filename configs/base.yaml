@@ -106,3 +106,4 @@ paths:
   figures_dir: "results/figures"
   checkpoints_at_dir: "results/checkpoints/at"
   checkpoints_atkd_dir: "results/checkpoints/atkd"
+  finetuned_dir: "checkpoints/finetuned"

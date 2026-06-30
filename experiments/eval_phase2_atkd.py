@@ -487,7 +487,13 @@ def main() -> None:
     # ── Load FP32 teacher once — reused across all compression levels ──────────
     # Teacher is always FP32 DeiT-S. It must never be updated.
     print(f"[phase2-ATKD] Loading FP32 teacher …")
-    teacher = load_model(model_name, "fp32", cfg, device=device)
+    teacher = load_model(
+        model_name,
+        "fp32",
+        cfg,
+        device=device,
+        dataset=cfg["dataset"]["name"],
+    )
     teacher.eval()
     for p in teacher.parameters():
         p.requires_grad_(False)
@@ -513,7 +519,13 @@ def main() -> None:
         # ── Load compressed student ────────────────────────────────────────────
         print(f"[phase2-ATKD] {compression:<6}: loading {model_name} (student) …")
         try:
-            raw_student = load_model(model_name, compression, cfg, device=device)
+            raw_student = load_model(
+                model_name,
+                compression,
+                cfg,
+                device=device,
+                dataset=cfg["dataset"]["name"],
+            )
         except Exception as exc:
             print(f"[phase2-ATKD] {compression:<6}: load failed — {exc}")
             continue

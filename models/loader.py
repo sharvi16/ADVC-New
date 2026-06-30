@@ -65,7 +65,11 @@ def load_model(
     if dataset is None:
         dataset = config.get("dataset", {}).get("name", "imagenet")
 
-    num_classes = {"imagenet": 1000, "imagenette": 1000, "cifar10": 10, "cifar100": 100}[dataset]
+    dataset_key = dataset
+    if dataset_key == "imagenet" and "imagenet" not in config.get("datasets", {}):
+        dataset_key = "imagenette"
+
+    num_classes = config["datasets"][dataset_key]["num_classes"]
     model_cfg = config["models"][model_name]
     timm_name = model_cfg["timm_name"]
 
@@ -75,9 +79,11 @@ def load_model(
             timm_name, pretrained=True, num_classes=num_classes
         )
         # Load fine-tuned CIFAR checkpoint if it exists
-        ckpt_path = f"checkpoints/finetuned/{model_name}_{dataset}_head.pt"
+        ckpt_dir = config["paths"].get("finetuned_dir", "checkpoints/finetuned")
+        ckpt_path = os.path.join(ckpt_dir, f"{model_name}_{dataset}_head.pt")
         if os.path.exists(ckpt_path):
             model.load_state_dict(torch.load(ckpt_path, map_location="cpu"))
+            print(f"[loader] Loaded checkpoint: {ckpt_path}")
         else:
             raise FileNotFoundError(
                 f"No fine-tuned checkpoint found at {ckpt_path}. "

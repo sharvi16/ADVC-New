@@ -381,7 +381,13 @@ def main() -> None:
             label = f"{compression}+{defense}"
             print(f"[phase3] {label}: loading {model_name} …")
             try:
-                raw_model = load_model(model_name, compression, cfg, device=device)
+                raw_model = load_model(
+                    model_name,
+                    compression,
+                    cfg,
+                    device=device,
+                    dataset=cfg["dataset"]["name"],
+                )
             except Exception as exc:
                 print(f"[phase3] {label}: load failed — {exc}")
                 continue
