@@ -39,6 +39,9 @@ dataset:
   train_dir: "/kaggle/working/imagenette2/train"
 
 datasets:
+  imagenet:
+    num_classes: 1000
+
   imagenette:
     val_dir: "data/imagenette2-320/val"
     train_dir: "data/imagenette2-320/train"
@@ -52,6 +55,10 @@ datasets:
   cifar100:
     num_classes: 100
     download: true
+    image_size: 224
+
+  tinyimagenet:
+    num_classes: 200
     image_size: 224
 
 # Attack - FGSM

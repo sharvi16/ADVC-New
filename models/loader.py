@@ -65,11 +65,7 @@ def load_model(
     if dataset is None:
         dataset = config.get("dataset", {}).get("name", "imagenet")
 
-    dataset_key = dataset
-    if dataset_key == "imagenet" and "imagenet" not in config.get("datasets", {}):
-        dataset_key = "imagenette"
-
-    num_classes = config["datasets"][dataset_key]["num_classes"]
+    num_classes = config["datasets"][dataset]["num_classes"]
     model_cfg = config["models"][model_name]
     timm_name = model_cfg["timm_name"]
 
