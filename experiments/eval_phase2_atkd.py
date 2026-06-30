@@ -128,26 +128,43 @@ def _remap_subset_labels(dataset: ImageFolder) -> ImageFolder:
 
 # ── Data loaders ──────────────────────────────────────────────────────────────
 
-def build_val_loader(cfg: dict, device: str) -> DataLoader:
+def build_val_loader(cfg: dict, device: str, dataset: str = None) -> DataLoader:
     """Build a deterministic validation subset loader.
 
-    Uses seed=42 via randperm, matching configs/base.yaml so results are
-    reproducible across runs.
+    Works with both CIFAR datasets (no remapping) and ImageNette (remapped).
     """
+    if dataset is None:
+        dataset = cfg["dataset"]["name"]
+
     ds_cfg = cfg["dataset"]
     eval_cfg = cfg["eval"]
 
-    transform = T.Compose([
-        T.Resize(256),
-        T.CenterCrop(ds_cfg["image_size"]),
-        T.ToTensor(),
-        T.Normalize(mean=ds_cfg["mean"], std=ds_cfg["std"]),
-    ])
-
-    val_path = resolve_data_path(_ROOT, ds_cfg["val_dir"])
-    print(f"[phase2-ATKD] val_dir   : {val_path}")
-    full_dataset = ImageFolder(root=str(val_path), transform=transform)
-    full_dataset = _remap_subset_labels(full_dataset)
+    if dataset == "cifar10":
+        from torchvision.datasets import CIFAR10
+        transform = T.Compose([
+            T.Resize(ds_cfg["image_size"]),
+            T.ToTensor(),
+            T.Normalize(mean=ds_cfg["mean"], std=ds_cfg["std"]),
+        ])
+        full_dataset = CIFAR10(root="data/cifar", train=False, download=True, transform=transform)
+    elif dataset == "cifar100":
+        from torchvision.datasets import CIFAR100
+        transform = T.Compose([
+            T.Resize(ds_cfg["image_size"]),
+            T.ToTensor(),
+            T.Normalize(mean=ds_cfg["mean"], std=ds_cfg["std"]),
+        ])
+        full_dataset = CIFAR100(root="data/cifar", train=False, download=True, transform=transform)
+    else:
+        transform = T.Compose([
+            T.Resize(256),
+            T.CenterCrop(ds_cfg["image_size"]),
+            T.ToTensor(),
+            T.Normalize(mean=ds_cfg["mean"], std=ds_cfg["std"]),
+        ])
+        val_path = resolve_data_path(_ROOT, ds_cfg["val_dir"])
+        full_dataset = ImageFolder(root=str(val_path), transform=transform)
+        full_dataset = _remap_subset_labels(full_dataset)
 
     rng = torch.Generator()
     rng.manual_seed(cfg["seed"])
@@ -165,31 +182,41 @@ def build_val_loader(cfg: dict, device: str) -> DataLoader:
     )
 
 
-def build_patch_val_loader(cfg: dict, device: str) -> DataLoader:
-    """Build a smaller validation loader used exclusively for the patch attack.
+def build_patch_val_loader(cfg: dict, device: str, dataset: str = None) -> DataLoader:
+    """Build a smaller validation loader used exclusively for the patch attack."""
+    if dataset is None:
+        dataset = cfg["dataset"]["name"]
 
-    The patch attack runs 150 PGD-style optimisation steps per batch, making
-    it ~7.5× more expensive than FGSM/PGD.  Using 500 images instead of the
-    full val subset keeps patch evaluation tractable while
-    still producing a statistically meaningful ASR estimate.
-    FGSM and PGD always use the full val_subset_size loader.
-    """
     ds_cfg = cfg["dataset"]
     eval_cfg = cfg["eval"]
 
-    transform = T.Compose([
-        T.Resize(256),
-        T.CenterCrop(ds_cfg["image_size"]),
-        T.ToTensor(),
-        T.Normalize(mean=ds_cfg["mean"], std=ds_cfg["std"]),
-    ])
+    if dataset == "cifar10":
+        from torchvision.datasets import CIFAR10
+        transform = T.Compose([
+            T.Resize(ds_cfg["image_size"]),
+            T.ToTensor(),
+            T.Normalize(mean=ds_cfg["mean"], std=ds_cfg["std"]),
+        ])
+        full_dataset = CIFAR10(root="data/cifar", train=False, download=True, transform=transform)
+    elif dataset == "cifar100":
+        from torchvision.datasets import CIFAR100
+        transform = T.Compose([
+            T.Resize(ds_cfg["image_size"]),
+            T.ToTensor(),
+            T.Normalize(mean=ds_cfg["mean"], std=ds_cfg["std"]),
+        ])
+        full_dataset = CIFAR100(root="data/cifar", train=False, download=True, transform=transform)
+    else:
+        transform = T.Compose([
+            T.Resize(256),
+            T.CenterCrop(ds_cfg["image_size"]),
+            T.ToTensor(),
+            T.Normalize(mean=ds_cfg["mean"], std=ds_cfg["std"]),
+        ])
+        val_path = resolve_data_path(_ROOT, ds_cfg["val_dir"])
+        full_dataset = ImageFolder(root=str(val_path), transform=transform)
+        full_dataset = _remap_subset_labels(full_dataset)
 
-    val_path = resolve_data_path(_ROOT, ds_cfg["val_dir"])
-    full_dataset = ImageFolder(root=str(val_path), transform=transform)
-    full_dataset = _remap_subset_labels(full_dataset)
-
-    # Draw from the same shuffled order as build_val_loader so the 500 images
-    # are a strict prefix of the full val subset — results stay comparable.
     rng = torch.Generator()
     rng.manual_seed(cfg["seed"])
     n_full = min(ds_cfg["val_subset_size"], len(full_dataset))
@@ -207,26 +234,42 @@ def build_patch_val_loader(cfg: dict, device: str) -> DataLoader:
     )
 
 
-def build_train_loader(cfg: dict, device: str) -> DataLoader:
-    """Build a deterministic training subset loader for AT+KD fine-tuning.
+def build_train_loader(cfg: dict, device: str, dataset: str = None) -> DataLoader:
+    """Build a deterministic training subset loader for AT+KD fine-tuning."""
+    if dataset is None:
+        dataset = cfg["dataset"]["name"]
 
-    Uses seed=42 via randperm matching configs/base.yaml.
-    Batch size is cfg["defense"]["batch_size"] (32 per CLAUDE.md).
-    """
     ds_cfg = cfg["dataset"]
     defense_cfg = cfg["defense"]
 
-    transform = T.Compose([
-        T.RandomResizedCrop(ds_cfg["image_size"]),
-        T.RandomHorizontalFlip(),
-        T.ToTensor(),
-        T.Normalize(mean=ds_cfg["mean"], std=ds_cfg["std"]),
-    ])
-
-    train_path = resolve_data_path(_ROOT, ds_cfg["train_dir"])
-    print(f"[phase2-ATKD] train_dir : {train_path}")
-    full_dataset = ImageFolder(root=str(train_path), transform=transform)
-    full_dataset = _remap_subset_labels(full_dataset)
+    if dataset == "cifar10":
+        from torchvision.datasets import CIFAR10
+        transform = T.Compose([
+            T.RandomResizedCrop(ds_cfg["image_size"]),
+            T.RandomHorizontalFlip(),
+            T.ToTensor(),
+            T.Normalize(mean=ds_cfg["mean"], std=ds_cfg["std"]),
+        ])
+        full_dataset = CIFAR10(root="data/cifar", train=True, download=True, transform=transform)
+    elif dataset == "cifar100":
+        from torchvision.datasets import CIFAR100
+        transform = T.Compose([
+            T.RandomResizedCrop(ds_cfg["image_size"]),
+            T.RandomHorizontalFlip(),
+            T.ToTensor(),
+            T.Normalize(mean=ds_cfg["mean"], std=ds_cfg["std"]),
+        ])
+        full_dataset = CIFAR100(root="data/cifar", train=True, download=True, transform=transform)
+    else:
+        transform = T.Compose([
+            T.RandomResizedCrop(ds_cfg["image_size"]),
+            T.RandomHorizontalFlip(),
+            T.ToTensor(),
+            T.Normalize(mean=ds_cfg["mean"], std=ds_cfg["std"]),
+        ])
+        train_path = resolve_data_path(_ROOT, ds_cfg["train_dir"])
+        full_dataset = ImageFolder(root=str(train_path), transform=transform)
+        full_dataset = _remap_subset_labels(full_dataset)
 
     rng = torch.Generator()
     rng.manual_seed(cfg["seed"])
